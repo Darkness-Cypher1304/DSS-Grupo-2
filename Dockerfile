@@ -11,8 +11,5 @@ COPY . .
 
 EXPOSE 5000
 
-<<<<<<< HEAD
 CMD ["python", "app.py"]
-=======
-CMD ["python", "app.py"]
->>>>>>> e77f844 (feat: base app + dockerfile)
+
