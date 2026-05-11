@@ -28,7 +28,7 @@ jobs:
 
       # 4. Ejecutar tests
       - name: Ejecutar tests
-        run: pytest tests/ -v
+        run: PYTHONPATH=. pytest tests/ -v
 
       # 5. Análisis SAST con Bandit
       - name: 🔒 Análisis de seguridad (Bandit)
