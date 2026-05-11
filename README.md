@@ -54,3 +54,13 @@ El pipeline fue probado exitosamente en los siguientes escenarios:
 - Pipeline exitoso con deploy completo Dev → Prod
 - Bloqueo automático del pipeline cuando los tests fallan
 - Validación automática mediante smoke tests
+
+---
+
+## Flujo de trabajo Git
+
+El proyecto utiliza GitHub Flow con:
+- feature branches
+- pull requests
+- protección de rama main
+- validaciones CI/CD automáticas
