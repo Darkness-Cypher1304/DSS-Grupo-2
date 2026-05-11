@@ -54,3 +54,7 @@ El pipeline fue probado exitosamente en los siguientes escenarios:
 - Pipeline exitoso con deploy completo Dev → Prod
 - Bloqueo automático del pipeline cuando los tests fallan
 - Validación automática mediante smoke tests
+
+---
+
+- Pull Requests creados desde GitHub CLI
