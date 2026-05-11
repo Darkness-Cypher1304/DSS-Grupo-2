@@ -64,3 +64,4 @@ El proyecto utiliza GitHub Flow con:
 - pull requests
 - protección de rama main
 - validaciones CI/CD automáticas
+- Pull Requests creados desde GitHub CLI
