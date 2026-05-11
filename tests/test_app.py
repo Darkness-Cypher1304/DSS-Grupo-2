@@ -15,4 +15,4 @@ def test_hello(client):
 
 def test_health(client):
     res = client.get('/health')
-    assert res.status_code == 500
+    assert res.status_code == 200
