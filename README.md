@@ -57,4 +57,8 @@ El pipeline fue probado exitosamente en los siguientes escenarios:
 
 ---
 
+- Pull Requests creados desde GitHub CLI
+
+---
+
 Prueba de protección de rama
