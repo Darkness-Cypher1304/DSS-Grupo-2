@@ -62,3 +62,7 @@ El pipeline fue probado exitosamente en los siguientes escenarios:
 ---
 
 Prueba de protección de rama
+
+---
+
+Prueba del merge en la rama main
