@@ -1,0 +1,104 @@
+# ============================================================
+# Dependencias
+# ============================================================
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+
+# ============================================================
+# Variables de entorno (NUNCA subir secretos al repo)
+# ============================================================
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+**/.env
+**/.env.local
+**/.env.*.local
+!.env.example
+
+# ============================================================
+# Build outputs
+# ============================================================
+dist/
+build/
+.next/
+out/
+**/dist/
+**/build/
+**/.next/
+**/out/
+
+# ============================================================
+# Coverage / Tests
+# ============================================================
+coverage/
+.nyc_output/
+**/coverage/
+*.lcov
+
+# ============================================================
+# Logs
+# ============================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# ============================================================
+# Docker volumes (datos locales — nunca al repo)
+# ============================================================
+infra/data/
+infra/postgres-data/
+infra/redis-data/
+infra/minio-data/
+**/data/
+**/postgres-data/
+**/redis-data/
+**/minio-data/
+
+# ============================================================
+# Prisma
+# ============================================================
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+
+# ============================================================
+# Generated
+# ============================================================
+backend/src/generated/
+frontend/src/generated/
+*.tsbuildinfo
+next-env.d.ts
+
+# ============================================================
+# Sistema operativo
+# ============================================================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ============================================================
+# Archivos sensibles (claves privadas, certificados)
+# ============================================================
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+private-key/

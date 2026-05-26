@@ -1,0 +1,176 @@
+# ============================================================================
+# NeuroAlert · Deploy Pipeline — Render
+# ============================================================================
+# Se ejecuta automáticamente después de que CI pase.
+#
+# SECRETS necesarios en GitHub (Settings → Secrets and variables → Actions):
+#   RENDER_DEPLOY_HOOK_BACKEND_PROD   → URL del deploy hook del backend prod
+#   RENDER_DEPLOY_HOOK_BACKEND_DEV    → URL del deploy hook del backend dev
+#   RENDER_DEPLOY_HOOK_FRONTEND_PROD  → URL del deploy hook del frontend prod
+#   RENDER_DEPLOY_HOOK_FRONTEND_DEV   → URL del deploy hook del frontend dev
+#
+# Cómo obtener los deploy hooks:
+#   Render Dashboard → tu servicio → Settings → Deploy Hooks → Create Deploy Hook
+# ============================================================================
+
+name: Deploy
+
+on:
+  # Se dispara cuando CI termina exitosamente
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main, develop]
+
+  # También se puede disparar manualmente
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Ambiente al que desplegar'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+          - all
+
+jobs:
+
+  # ==========================================================================
+  # DETERMINAR QUÉ SE DESPLIEGA
+  # ==========================================================================
+  context:
+    name: 📋 Determinar contexto de deploy
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_prod: ${{ steps.ctx.outputs.deploy_prod }}
+      deploy_dev:  ${{ steps.ctx.outputs.deploy_dev }}
+    steps:
+      - name: Evaluar contexto
+        id: ctx
+        run: |
+          BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          INPUT_ENV="${{ inputs.environment }}"
+
+          # Deploy a producción si: branch main o input = prod/all
+          if [[ "$BRANCH" == "main" || "$INPUT_ENV" == "prod" || "$INPUT_ENV" == "all" ]]; then
+            echo "deploy_prod=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_prod=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Deploy a dev si: branch develop o input = dev/all
+          if [[ "$BRANCH" == "develop" || "$INPUT_ENV" == "dev" || "$INPUT_ENV" == "all" ]]; then
+            echo "deploy_dev=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_dev=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ==========================================================================
+  # DEPLOY DEVELOPMENT
+  # ==========================================================================
+  deploy-dev:
+    name: 🟢 Deploy DEV (develop → Render)
+    runs-on: ubuntu-latest
+    needs: context
+    if: |
+      needs.context.outputs.deploy_dev == 'true' &&
+      (github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch')
+    environment:
+      name: development
+      url: https://neuroalert-frontend-dev.onrender.com
+
+    steps:
+      - name: 🚀 Trigger Backend DEV deploy en Render
+        run: |
+          echo "Desplegando Backend DEV..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK_BACKEND_DEV }}")
+          if [ "$STATUS" -eq 200 ] || [ "$STATUS" -eq 201 ]; then
+            echo "✅ Backend DEV deploy iniciado (HTTP $STATUS)"
+          else
+            echo "❌ Error al disparar deploy Backend DEV (HTTP $STATUS)"
+            exit 1
+          fi
+
+      - name: 🚀 Trigger Frontend DEV deploy en Render
+        run: |
+          echo "Desplegando Frontend DEV..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND_DEV }}")
+          if [ "$STATUS" -eq 200 ] || [ "$STATUS" -eq 201 ]; then
+            echo "✅ Frontend DEV deploy iniciado (HTTP $STATUS)"
+          else
+            echo "❌ Error al disparar deploy Frontend DEV (HTTP $STATUS)"
+            exit 1
+          fi
+
+      - name: 🧪 Verificar salud DEV (30s tras deploy)
+        run: |
+          echo "Esperando 30s para que Render procese..."
+          sleep 30
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://neuroalert-backend-dev.onrender.com/health || echo "000")
+          echo "Health check DEV: HTTP $HTTP"
+          # En Render free, el cold start puede tomar hasta 60s — no fallar aquí
+          echo "✅ Deploy DEV completado (verificar en https://neuroalert-frontend-dev.onrender.com)"
+
+  # ==========================================================================
+  # DEPLOY PRODUCCIÓN
+  # ==========================================================================
+  deploy-prod:
+    name: 🔴 Deploy PRODUCCIÓN (main → Render)
+    runs-on: ubuntu-latest
+    needs: context
+    if: |
+      needs.context.outputs.deploy_prod == 'true' &&
+      (github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch')
+    environment:
+      name: production
+      url: https://neuroalert-frontend-prod.onrender.com
+
+    steps:
+      - name: 🚀 Trigger Backend PROD deploy en Render
+        run: |
+          echo "Desplegando Backend PRODUCCIÓN..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK_BACKEND_PROD }}")
+          if [ "$STATUS" -eq 200 ] || [ "$STATUS" -eq 201 ]; then
+            echo "✅ Backend PROD deploy iniciado (HTTP $STATUS)"
+          else
+            echo "❌ Error al disparar deploy Backend PROD (HTTP $STATUS)"
+            exit 1
+          fi
+
+      - name: 🚀 Trigger Frontend PROD deploy en Render
+        run: |
+          echo "Desplegando Frontend PRODUCCIÓN..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK_FRONTEND_PROD }}")
+          if [ "$STATUS" -eq 200 ] || [ "$STATUS" -eq 201 ]; then
+            echo "✅ Frontend PROD deploy iniciado (HTTP $STATUS)"
+          else
+            echo "❌ Error al disparar deploy Frontend PROD (HTTP $STATUS)"
+            exit 1
+          fi
+
+      - name: 🧪 Verificar salud PRODUCCIÓN
+        run: |
+          echo "Esperando 30s..."
+          sleep 30
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://neuroalert-backend-prod.onrender.com/health || echo "000")
+          echo "Health check PROD: HTTP $HTTP"
+          echo "✅ Deploy PROD completado (verificar en https://neuroalert-frontend-prod.onrender.com)"
+
+      - name: 📢 Resumen del deploy
+        run: |
+          echo "════════════════════════════════════════════════"
+          echo "🚀 NeuroAlert · Deploy a Producción completado"
+          echo "════════════════════════════════════════════════"
+          echo "Commit:    ${{ github.sha }}"
+          echo "Por:       ${{ github.actor }}"
+          echo "Frontend:  https://neuroalert-frontend-prod.onrender.com"
+          echo "Backend:   https://neuroalert-backend-prod.onrender.com"
+          echo "API Docs:  https://neuroalert-backend-prod.onrender.com/api/docs"
+          echo "════════════════════════════════════════════════"

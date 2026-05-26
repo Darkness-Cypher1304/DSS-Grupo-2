@@ -1,0 +1,138 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bone: #f7f4ed;
+    --color-teal: #235452;
+    --color-coral: #e35a3e;
+    --color-ink: #1a1d1c;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-bone-50 text-ink font-sans;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+
+  /* Headings: Fraunces con peso editorial */
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tightest;
+    font-feature-settings: 'ss01', 'liga';
+  }
+
+  /* Selección de texto en color marca */
+  ::selection {
+    @apply bg-teal-700 text-bone-50;
+  }
+
+  /* Scrollbar custom */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-bone-100;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-teal-300 rounded-full;
+    border: 2px solid var(--color-bone);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-teal-500;
+  }
+
+  /* Focus ring consistente para accesibilidad */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-teal-500 ring-offset-2 ring-offset-bone-50;
+  }
+}
+
+@layer components {
+  /* ========================================================================
+     BOTONES
+     ======================================================================== */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-teal-700 text-bone-50 hover:bg-teal-800 active:scale-[0.98] shadow-sm hover:shadow-md;
+  }
+
+  .btn-secondary {
+    @apply btn bg-bone-100 text-teal-800 border border-bone-300 hover:bg-bone-200 active:scale-[0.98];
+  }
+
+  .btn-coral {
+    @apply btn bg-coral-500 text-white hover:bg-coral-600 active:scale-[0.98] shadow-sm hover:shadow-md;
+  }
+
+  .btn-ghost {
+    @apply btn text-teal-800 hover:bg-bone-100;
+  }
+
+  /* ========================================================================
+     INPUTS
+     ======================================================================== */
+  .input {
+    @apply w-full px-4 py-2.5 rounded-xl border border-bone-300 bg-bone-50 text-ink placeholder:text-ink-fade focus:border-teal-500 focus:bg-white transition-colors;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-ink-soft mb-1.5;
+  }
+
+  /* ========================================================================
+     CARDS
+     ======================================================================== */
+  .card {
+    @apply bg-white rounded-2xl border border-bone-200 p-6 transition-shadow hover:shadow-md;
+  }
+
+  .card-clinical {
+    @apply card border-teal-100 bg-gradient-to-br from-white to-teal-50/40;
+  }
+
+  /* ========================================================================
+     UTILITIES
+     ======================================================================== */
+  .container-narrow {
+    @apply max-w-3xl mx-auto px-6;
+  }
+
+  .container-wide {
+    @apply max-w-6xl mx-auto px-6;
+  }
+
+  /* Badge de estado */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .badge-low { @apply badge bg-teal-100 text-teal-800; }
+  .badge-medium { @apply badge bg-amber-100 text-amber-800; }
+  .badge-high { @apply badge bg-coral-100 text-coral-800; }
+
+  /* Gradient text para títulos especiales */
+  .gradient-text {
+    @apply bg-gradient-to-br from-teal-700 via-teal-600 to-coral-600 bg-clip-text text-transparent;
+  }
+}
+
+/* Texturas grain para fondos editoriales */
+.grain-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  opacity: 0.6;
+}

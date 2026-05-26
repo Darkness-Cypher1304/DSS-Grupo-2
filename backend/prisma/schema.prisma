@@ -1,0 +1,429 @@
+// ============================================================================
+// NeuroAlert · Schema Prisma
+// ============================================================================
+// Modelo de datos completo de la plataforma.
+// Cada modelo está documentado con su propósito y consideraciones de seguridad.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+/// Roles del sistema (RBAC)
+/// - PARENT: padre/cuidador. Acceso al M-CHAT-R y a hacer consultas.
+/// - SPECIALIST: pediatra/psicólogo verificado. Responde consultas, publica contenido.
+/// - ADMIN: administrador del sistema. Verifica especialistas, modera, audita.
+enum UserRole {
+  PARENT
+  SPECIALIST
+  ADMIN
+}
+
+/// Estado del usuario
+enum UserStatus {
+  PENDING_VERIFICATION  // recién registrado, pendiente de verificar email
+  ACTIVE                // activo y verificado
+  SUSPENDED             // suspendido por admin
+  LOCKED                // bloqueado por intentos de login fallidos
+}
+
+/// Estado de verificación profesional del especialista
+enum SpecialistVerificationStatus {
+  NOT_REQUIRED  // para padres y admins
+  PENDING       // documentos enviados, esperando revisión del admin
+  APPROVED      // verificado y aprobado
+  REJECTED      // rechazado
+}
+
+/// Estado del contenido educativo
+enum ContentStatus {
+  DRAFT       // borrador, solo el autor lo ve
+  PENDING     // enviado a revisión del admin
+  PUBLISHED   // publicado, visible para todos
+  ARCHIVED    // archivado
+}
+
+/// Estado de una consulta padre→especialista
+enum QuestionStatus {
+  OPEN          // recién creada, esperando especialista
+  ASSIGNED      // un especialista la tomó
+  ANSWERED      // ya respondida
+  CLOSED        // cerrada por el padre o por el sistema
+}
+
+/// Nivel de riesgo del cuestionario M-CHAT-R
+/// Basado en el scoring oficial de Robins, Fein, & Barton (2009)
+enum MchatRiskLevel {
+  LOW       // 0-2 puntos: riesgo bajo, no se requiere acción adicional
+  MEDIUM    // 3-7 puntos: riesgo medio, hacer seguimiento (M-CHAT-R/F)
+  HIGH      // 8-20 puntos: riesgo alto, derivar inmediatamente a especialista
+}
+
+/// Tipo de acción auditada
+enum AuditAction {
+  USER_REGISTERED
+  USER_LOGIN_SUCCESS
+  USER_LOGIN_FAILED
+  USER_LOGOUT
+  USER_PASSWORD_CHANGED
+  USER_EMAIL_VERIFIED
+  USER_ROLE_CHANGED
+  USER_STATUS_CHANGED
+  SPECIALIST_VERIFIED
+  SPECIALIST_REJECTED
+  CONTENT_CREATED
+  CONTENT_PUBLISHED
+  CONTENT_DELETED
+  QUESTION_CREATED
+  QUESTION_ANSWERED
+  MCHAT_COMPLETED
+  RESOURCE_UPLOADED
+  RESOURCE_DELETED
+  ADMIN_ACTION
+  SECURITY_ALERT
+}
+
+// ============================================================================
+// MODELO: USER
+// ============================================================================
+// El núcleo del sistema. Almacena credenciales y metadatos.
+// SEGURIDAD:
+//   - id: CUID2 (no incremental, opaco — previene IDOR)
+//   - passwordHash: bcrypt rounds=12 (NUNCA almacenar password en claro)
+//   - email: citext (case-insensitive) y unique
+//   - failedLoginAttempts + lockedUntil: previene brute force
+//   - emailVerificationToken: para flujo de verificación
+//   - relación con AuditLog para trazabilidad completa
+
+model User {
+  id                String     @id @default(cuid())
+  email             String     @unique @db.Citext
+  passwordHash      String
+  fullName          String
+  phoneNumber       String?
+
+  role              UserRole   @default(PARENT)
+  status            UserStatus @default(PENDING_VERIFICATION)
+
+  // Verificación de email
+  emailVerified              Boolean   @default(false)
+  emailVerificationToken     String?   @unique
+  emailVerificationExpiresAt DateTime?
+
+  // Reset de contraseña
+  passwordResetToken         String?   @unique
+  passwordResetExpiresAt     DateTime?
+
+  // Defensa contra brute force
+  failedLoginAttempts        Int       @default(0)
+  lockedUntil                DateTime?
+  lastLoginAt                DateTime?
+  lastLoginIp                String?
+
+  // Solo para SPECIALIST
+  specialistProfile          SpecialistProfile?
+
+  // Timestamps
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime? // soft delete (no se borra realmente, se marca)
+
+  // Relaciones
+  refreshTokens       RefreshToken[]
+  mchatScreenings     MchatScreening[]
+  questionsAsked      Question[]      @relation("QuestionAuthor")
+  questionsAssigned   Question[]      @relation("QuestionAssignedTo")
+  answers             Answer[]
+  contentCreated      Content[]
+  resourcesUploaded   Resource[]
+  auditLogs           AuditLog[]
+
+  @@index([email])
+  @@index([role, status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// ============================================================================
+// MODELO: SPECIALIST_PROFILE
+// ============================================================================
+// Datos profesionales solo para usuarios con rol SPECIALIST.
+// Separado en otra tabla para no inflar User y por Single Responsibility.
+
+model SpecialistProfile {
+  id                  String                       @id @default(cuid())
+  userId              String                       @unique
+  user                User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  licenseNumber       String                       @unique  // CMP/CPsP
+  specialty           String                       // "Pediatría", "Psicología infantil", etc.
+  institution         String?                      // hospital o clínica
+  yearsOfExperience   Int
+
+  bio                 String?                      @db.Text
+  profilePhotoKey     String?                      // ruta en MinIO
+
+  verificationStatus  SpecialistVerificationStatus @default(PENDING)
+  verifiedAt          DateTime?
+  verifiedById        String?                      // admin que aprobó
+  rejectionReason     String?                      @db.Text
+
+  // Documentos de validación (rutas en MinIO)
+  licenseDocumentKey  String?
+  cvDocumentKey       String?
+
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @updatedAt
+
+  @@index([verificationStatus])
+  @@map("specialist_profiles")
+}
+
+// ============================================================================
+// MODELO: REFRESH_TOKEN
+// ============================================================================
+// Almacena los refresh tokens emitidos. Permite revocación selectiva.
+// SEGURIDAD: el access token (15min) NO se almacena, solo el refresh (7d).
+// Cuando se revoca, se invalida en Redis blacklist Y en esta tabla.
+
+model RefreshToken {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique  // hash del token, no el token plano
+  family      String                       // grupo de tokens del mismo "device"
+  ipAddress   String?
+  userAgent   String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  revokedReason String?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([family])
+  @@map("refresh_tokens")
+}
+
+// ============================================================================
+// MODELO: FAILED_LOGIN_ATTEMPT
+// ============================================================================
+// Registra todos los intentos fallidos de login para análisis de seguridad.
+// Cumple con OWASP A09 (Security Logging Failures).
+
+model FailedLoginAttempt {
+  id          String   @id @default(cuid())
+  email       String   @db.Citext  // puede ser email que NO existe
+  ipAddress   String
+  userAgent   String?
+  reason      String   // "INVALID_PASSWORD", "USER_NOT_FOUND", "ACCOUNT_LOCKED"
+  attemptedAt DateTime @default(now())
+
+  @@index([email, attemptedAt])
+  @@index([ipAddress, attemptedAt])
+  @@map("failed_login_attempts")
+}
+
+// ============================================================================
+// MODELO: CONTENT (Artículos educativos sobre TEA)
+// ============================================================================
+// Contenido educativo creado por especialistas y aprobado por admins.
+
+model Content {
+  id            String        @id @default(cuid())
+  authorId      String
+  author        User          @relation(fields: [authorId], references: [id])
+
+  title         String
+  slug          String        @unique
+  summary       String        @db.VarChar(500)
+  body          String        @db.Text
+  category      String        // "Señales tempranas", "Diagnóstico", "Intervención", etc.
+  tags          String[]
+  coverImageKey String?       // ruta en MinIO
+
+  status        ContentStatus @default(DRAFT)
+  publishedAt   DateTime?
+
+  // Métricas
+  viewCount     Int           @default(0)
+
+  // Moderación
+  reviewedById  String?
+  reviewNotes   String?       @db.Text
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  deletedAt     DateTime?
+
+  @@index([status, publishedAt])
+  @@index([authorId])
+  @@index([slug])
+  @@map("contents")
+}
+
+// ============================================================================
+// MODELO: QUESTION (Consultas padre → especialista)
+// ============================================================================
+
+model Question {
+  id              String         @id @default(cuid())
+  authorId        String
+  author          User           @relation("QuestionAuthor", fields: [authorId], references: [id])
+
+  assignedToId    String?
+  assignedTo      User?          @relation("QuestionAssignedTo", fields: [assignedToId], references: [id])
+
+  title           String         @db.VarChar(200)
+  body            String         @db.Text
+  childAgeMonths  Int?           // edad del niño en meses (para contextualizar)
+  isUrgent        Boolean        @default(false)
+  isAnonymous     Boolean        @default(true)  // por defecto, anonimato del padre
+
+  status          QuestionStatus @default(OPEN)
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  closedAt        DateTime?
+
+  answers         Answer[]
+
+  @@index([status])
+  @@index([authorId])
+  @@index([assignedToId])
+  @@map("questions")
+}
+
+// ============================================================================
+// MODELO: ANSWER
+// ============================================================================
+
+model Answer {
+  id            String    @id @default(cuid())
+  questionId    String
+  question      Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  specialistId  String
+  specialist    User      @relation(fields: [specialistId], references: [id])
+
+  body          String    @db.Text
+  isAccepted    Boolean   @default(false)  // padre marca la respuesta como útil
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([questionId])
+  @@index([specialistId])
+  @@map("answers")
+}
+
+// ============================================================================
+// MODELO: MCHAT_SCREENING
+// ============================================================================
+// Cuestionario M-CHAT-R (Modified Checklist for Autism in Toddlers, Revised).
+// 20 preguntas validadas internacionalmente para tamizaje en niños 16-30 meses.
+// Robins, Fein, & Barton (2009).
+
+model MchatScreening {
+  id              String         @id @default(cuid())
+  parentId        String
+  parent          User           @relation(fields: [parentId], references: [id])
+
+  childName       String?        // opcional, padres pueden anonimizar
+  childAgeMonths  Int            // 16-30 meses idealmente
+  childGender     String?        // "M", "F", "OTHER", null
+
+  // Las 20 respuestas (true = respuesta de riesgo)
+  // Cada pregunta tiene una respuesta "esperada"; si difiere, suma puntos.
+  // Almacenamos como JSON para flexibilidad pero validamos estrictamente.
+  responses       Json           // { "q1": true/false, "q2": ..., ..., "q20": ... }
+
+  // Resultado calculado en el servidor (no en cliente — Zero Trust)
+  totalScore      Int            // 0-20
+  riskLevel       MchatRiskLevel
+
+  // Recomendaciones generadas (snapshot en el momento de la evaluación)
+  recommendations String         @db.Text
+
+  // Si el padre quiere convertir la evaluación en una consulta a especialista
+  followUpQuestionId String?
+
+  createdAt       DateTime       @default(now())
+
+  @@index([parentId, createdAt])
+  @@index([riskLevel])
+  @@map("mchat_screenings")
+}
+
+// ============================================================================
+// MODELO: RESOURCE (PDFs, imágenes, recursos descargables)
+// ============================================================================
+
+model Resource {
+  id            String    @id @default(cuid())
+  uploaderId    String
+  uploader      User      @relation(fields: [uploaderId], references: [id])
+
+  title         String
+  description   String?   @db.Text
+  category      String
+
+  fileKey       String    @unique  // ruta en MinIO
+  fileName      String              // nombre original
+  fileSize      Int                 // bytes
+  mimeType      String              // validado contra magic bytes
+  fileHash      String              // SHA-256 para verificar integridad
+
+  isPublic      Boolean   @default(false)
+  downloadCount Int       @default(0)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  @@index([category, isPublic])
+  @@index([uploaderId])
+  @@map("resources")
+}
+
+// ============================================================================
+// MODELO: AUDIT_LOG
+// ============================================================================
+// Tabla INSERT-only. NUNCA se actualiza ni borra.
+// Implementa el principio de Separation: ni el desarrollador puede borrar
+// su rastro de auditoría. La política RLS lo refuerza a nivel de BD.
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  userId      String?     // null si la acción fue del sistema o un atacante anónimo
+  user        User?       @relation(fields: [userId], references: [id])
+
+  action      AuditAction
+  entityType  String?     // "User", "Content", "Question", etc.
+  entityId    String?     // ID del recurso afectado
+
+  // Contexto de seguridad
+  ipAddress   String
+  userAgent   String?
+
+  // Resultado: true = exitoso, false = fallido
+  success     Boolean     @default(true)
+
+  // Detalles adicionales en JSON (no incluir datos sensibles!)
+  metadata    Json?
+
+  createdAt   DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
