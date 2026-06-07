@@ -1,41 +1,53 @@
 name: CI/CD Pipeline
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 jobs:
   test:
     name: Tests + Análisis de Seguridad
     runs-on: ubuntu-latest
 
+    # PostgreSQL temporal solo para CI
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Variable disponible para todos los steps
+    env:
+      DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
+
     steps:
       # 1. Descargar el código
       - name: Checkout código
         uses: actions/checkout@v4
-
       # 2. Instalar Python
       - name: Configurar Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       # 3. Instalar dependencias
       - name: Instalar dependencias
         run: pip install -r requirements.txt
-
       # 4. Ejecutar tests
       - name: Ejecutar tests
         run: PYTHONPATH=. pytest tests/ -v
-
       # 5. Análisis SAST con Bandit
       - name: 🔒 Análisis de seguridad (Bandit)
         run: |
           pip install bandit
-          # -ll = reportar solo severidad MEDIA y ALTA
-          # -ii = reportar solo confianza MEDIA y ALTA
           bandit -r . -ll -ii --exclude ./tests,./venv
 
   deploy-dev:
@@ -43,13 +55,11 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-
     steps:
       - name: 🚀 Deploy a Dev (Render)
         run: |
           curl -X POST ${{ secrets.RENDER_DEV_HOOK }}
           echo "Deploy a Dev disparado"
-
       - name: ⏳ Esperar que Render inicie
         run: sleep 30
 
@@ -57,11 +67,9 @@ jobs:
     name: Smoke Test en Dev
     needs: deploy-dev
     runs-on: ubuntu-latest
-
     steps:
       - name: 🩺 Verificar que Dev responde
         run: |
-          # Intentar 5 veces con 10 segundos entre intento
           for i in 1 2 3 4 5; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               https://miapp-dev.onrender.com/health)
@@ -79,12 +87,8 @@ jobs:
     name: Deploy a Producción
     needs: smoke-test
     runs-on: ubuntu-latest
-
     steps:
       - name: 🚀 Deploy a Prod (Render)
         run: |
           curl -X POST ${{ secrets.RENDER_PROD_HOOK }}
           echo "✅ Deploy a Producción disparado"
-
-#########
-
