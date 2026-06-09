@@ -7,6 +7,7 @@ Estructura (pirámide de testing):
 Todos siguen el patrón AAA (Arrange -> Act -> Assert) y nombres que
 describen el comportamiento esperado.
 """
+import os
 from unittest.mock import patch
 
 from app import app as flask_app
@@ -15,11 +16,12 @@ from app import app as flask_app
 # ===========================================================================
 # UNIT TESTS — configuración (sin HTTP, sin DB)
 # ===========================================================================
-def test_usa_sqlite_en_memoria_cuando_no_hay_database_url():
-    # ASSERT: el fallback de la masterclass (DB de test en memoria) está activo
-    # en local/CI cuando no se inyecta DATABASE_URL.
-    uri = flask_app.config['SQLALCHEMY_DATABASE_URI']
-    assert uri.startswith('sqlite'), f'esperaba SQLite de fallback, hay: {uri}'
+def test_database_uri_respeta_database_url_o_cae_a_sqlite():
+    # ASSERT (agnóstico al entorno): la URI configurada usa DATABASE_URL si
+    # existe (Postgres en CI/Render) o cae al fallback SQLite en memoria
+    # (local/tests). Pasa igual en ambos entornos.
+    esperada = os.environ.get('DATABASE_URL', 'sqlite:///:memory:')
+    assert flask_app.config['SQLALCHEMY_DATABASE_URI'] == esperada
 
 
 # ===========================================================================
