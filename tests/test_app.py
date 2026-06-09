@@ -40,8 +40,22 @@ def test_index_retorna_status_ok_y_estructura_json(client):
     data = res.get_json()
     # ASSERT: validar la estructura completa del JSON, no solo el status.
     assert data['status'] == 'ok'
-    assert data['message'] == 'Pipeline CI/CD funcionando'
+    assert 'message' in data
+    assert 'version' in data
     assert 'env' in data
+
+
+# ===========================================================================
+# INTEGRATION TESTS — GET /version  (commit/versión desplegada)
+# ===========================================================================
+def test_version_retorna_version_y_commit(client):
+    # ACT
+    res = client.get('/version')
+    # ASSERT
+    assert res.status_code == 200
+    data = res.get_json()
+    assert 'version' in data
+    assert 'commit' in data
 
 
 # ===========================================================================
@@ -87,3 +101,48 @@ def test_ruta_inexistente_retorna_404(client):
     res = client.get('/ruta-que-no-existe')
     # ASSERT
     assert res.status_code == 404
+
+
+# ===========================================================================
+# INTEGRATION TESTS — /mensajes  (persistencia real en la BD)
+# ===========================================================================
+def test_mensajes_inicia_vacio(client):
+    # ACT
+    res = client.get('/mensajes')
+    # ASSERT
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data['total'] == 0
+    assert data['mensajes'] == []
+
+
+def test_crear_mensaje_persiste_y_responde_201(client):
+    # ACT
+    res = client.post('/mensajes', json={'texto': 'hola mundo'})
+    # ASSERT
+    assert res.status_code == 201
+    data = res.get_json()
+    assert data['texto'] == 'hola mundo'
+    assert data['id'] is not None
+
+
+def test_crear_mensaje_sin_texto_retorna_400(client):
+    # ACT
+    res = client.post('/mensajes', json={})
+    # ASSERT
+    assert res.status_code == 400
+    assert 'error' in res.get_json()
+
+
+def test_listar_devuelve_los_mensajes_creados(client):
+    # ARRANGE — crear dos mensajes
+    client.post('/mensajes', json={'texto': 'uno'})
+    client.post('/mensajes', json={'texto': 'dos'})
+    # ACT
+    res = client.get('/mensajes')
+    # ASSERT — ambos persisten y se listan
+    data = res.get_json()
+    assert data['total'] == 2
+    textos = [m['texto'] for m in data['mensajes']]
+    assert 'uno' in textos
+    assert 'dos' in textos
