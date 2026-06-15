@@ -9,7 +9,6 @@ jobs:
     name: Tests + Análisis de Seguridad
     runs-on: ubuntu-latest
 
-    # PostgreSQL temporal solo para CI
     services:
       postgres:
         image: postgres:15
@@ -25,27 +24,28 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    # Variable disponible para todos los steps
     env:
       DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
 
     steps:
-      # 1. Descargar el código
       - name: Checkout código
         uses: actions/checkout@v4
-      # 2. Instalar Python
       - name: Configurar Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # 3. Instalar dependencias
       - name: Instalar dependencias
         run: pip install -r requirements.txt
-      # 4. Ejecutar tests (con cobertura; falla si baja del 85%)
       - name: Ejecutar tests
-        run: PYTHONPATH=. pytest tests/ -v --cov=app --cov-report=term-missing --cov-fail-under=85
-      # 5. Análisis SAST con Bandit
-      - name: 🔒 Análisis de seguridad (Bandit)
+        run: PYTHONPATH=. pytest tests/ -v --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+      - name: Subir cobertura a Codecov
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Análisis de seguridad (Bandit)
         run: |
           pip install bandit
           bandit -r . -ll -ii --exclude ./tests,./venv
@@ -56,11 +56,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
-      - name: 🚀 Deploy a Dev (Render)
+      - name: Deploy a Dev (Render)
         run: |
           curl -X POST ${{ secrets.RENDER_DEV_HOOK }}
           echo "Deploy a Dev disparado"
-      - name: ⏳ Esperar que Render inicie
+      - name: Esperar que Render inicie
         run: sleep 30
 
   smoke-test:
@@ -68,19 +68,19 @@ jobs:
     needs: deploy-dev
     runs-on: ubuntu-latest
     steps:
-      - name: 🩺 Verificar que Dev responde
+      - name: Verificar que Dev responde
         run: |
           for i in 1 2 3 4 5; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               https://miapp-dev.onrender.com/health)
             if [[ $STATUS -eq 200 ]]; then
-              echo "✅ Dev responde correctamente (HTTP $STATUS)"
+              echo "Dev responde correctamente (HTTP $STATUS)"
               exit 0
             fi
             echo "Intento $i fallido (HTTP $STATUS), reintentando..."
             sleep 10
           done
-          echo "❌ Dev no responde después de 5 intentos"
+          echo "Dev no responde después de 5 intentos"
           exit 1
 
   deploy-prod:
@@ -88,7 +88,7 @@ jobs:
     needs: smoke-test
     runs-on: ubuntu-latest
     steps:
-      - name: 🚀 Deploy a Prod (Render)
+      - name: Deploy a Prod (Render)
         run: |
           curl -X POST ${{ secrets.RENDER_PROD_HOOK }}
-          echo "✅ Deploy a Producción disparado"
+          echo "Deploy a Producción disparado"
