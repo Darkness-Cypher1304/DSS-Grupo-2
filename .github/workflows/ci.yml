@@ -83,7 +83,7 @@ jobs:
 
   deploy-dev:
     name: Deploy a Desarrollo
-    needs: test
+    needs: [test, codeql]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
