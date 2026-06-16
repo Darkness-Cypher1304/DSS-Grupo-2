@@ -1,4 +1,8 @@
 name: CI/CD Pipeline
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: [main]
@@ -8,7 +12,6 @@ jobs:
   test:
     name: Tests + Análisis de Seguridad
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:15
@@ -23,15 +26,13 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     env:
       DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
-
     steps:
       - name: Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Configurar Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Instalar dependencias
@@ -39,7 +40,7 @@ jobs:
       - name: Ejecutar tests
         run: PYTHONPATH=. pytest tests/ -v --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=85
       - name: Subir cobertura a Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         continue-on-error: true
         with:
           files: ./coverage.xml
