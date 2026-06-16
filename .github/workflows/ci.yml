@@ -51,6 +51,36 @@ jobs:
           pip install bandit
           bandit -r . -ll -ii --exclude ./tests,./venv
 
+  # CodeQL corre EN PARALELO al job test (sin needs): analisis estatico de
+  # seguridad (SAST) sobre el codigo Python y los workflows. Reporta al tab
+  # Security del repo y NO bloquea el deploy (deploy-dev solo needs: test).
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+
   deploy-dev:
     name: Deploy a Desarrollo
     needs: test
