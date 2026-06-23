@@ -135,16 +135,6 @@ jobs:
           fail_action: false
           allow_issue_writing: false
           artifact_name: 'zap-baseline-report'
-  
-      - name: Subir reporte ZAP
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: zap-baseline-report
-          path: |
-            report_html.html
-            report_json.json
-          retention-days: 30
 
   security-gate:
     name: Security Gate
