@@ -122,19 +122,19 @@ jobs:
     name: DAST - OWASP ZAP
     needs: smoke-test
     runs-on: ubuntu-latest
-
+  
     steps:
       - name: Checkout código
         uses: actions/checkout@v5
-
+  
       - name: Ejecutar OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.14.0
         with:
           target: 'https://miapp-dev.onrender.com'
           rules_file_name: '.zap/rules.tsv'
-          fail_action: true
+          fail_action: false
           artifact_name: 'zap-baseline-report'
-
+  
       - name: Subir reporte ZAP
         uses: actions/upload-artifact@v4
         if: always()
@@ -145,9 +145,79 @@ jobs:
             report_json.json
           retention-days: 30
 
+  security-gate:
+    name: Security Gate
+    needs: dast
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar reporte ZAP
+        uses: actions/download-artifact@v4
+        with:
+          name: zap-baseline-report
+
+      - name: Evaluar política de seguridad
+        run: |
+          python << 'EOF'
+          import json
+          import sys
+
+          with open("report_json.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          high_count = 0
+          medium_count = 0
+
+          blacklist = {
+              "40018",  # SQL Injection
+              "40012",  # Reflected XSS
+              "40014",  # Stored XSS
+              "10202"   # CSRF
+          }
+
+          found_blacklist = set()
+
+          for site in data.get("site", []):
+              for alert in site.get("alerts", []):
+
+                  plugin_id = str(alert.get("pluginid", ""))
+
+                  risk = str(alert.get("riskdesc", "")).lower()
+
+                  if "high" in risk:
+                      high_count += 1
+
+                  elif "medium" in risk:
+                      medium_count += 1
+
+                  if plugin_id in blacklist:
+                      found_blacklist.add(plugin_id)
+
+          print("=== RESUMEN SECURITY GATE ===")
+          print(f"High encontrados: {high_count}")
+          print(f"Medium encontrados: {medium_count}")
+          print(f"Blacklist encontrados: {len(found_blacklist)}")
+
+          if found_blacklist:
+              print("\nVulnerabilidades críticas detectadas:")
+              for vuln in sorted(found_blacklist):
+                  print(f" - {vuln}")
+              sys.exit(1)
+
+          if high_count >= 1:
+              print("\nSe detectaron vulnerabilidades HIGH")
+              sys.exit(1)
+
+          if medium_count >= 5:
+              print("\nSe detectaron 5 o más vulnerabilidades MEDIUM")
+              sys.exit(1)
+
+          print("\nSecurity Gate aprobado")
+          EOF
+  
   deploy-prod:
     name: Deploy a Producción
-    needs: dast
+    needs: security-gate
     runs-on: ubuntu-latest
     steps:
       - name: Deploy a Prod (Render)
