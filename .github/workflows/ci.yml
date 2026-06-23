@@ -113,10 +113,37 @@ jobs:
           done
           echo "Dev no responde después de 5 intentos"
           exit 1
+  dast:
+    name: DAST - OWASP ZAP
+    needs: smoke-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+
+      - name: Ejecutar OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: 'https://miapp-dev.onrender.com'
+          rules_file_name: '.zap/rules.tsv'
+          fail_action: true
+          fail_threshold: 'High'
+          artifact_name: 'zap-baseline-report'
+
+      - name: Subir reporte ZAP
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-baseline-report
+          path: |
+            report_html.html
+            report_json.json
+          retention-days: 30
 
   deploy-prod:
     name: Deploy a Producción
-    needs: smoke-test
+    needs: dast
     runs-on: ubuntu-latest
     steps:
       - name: Deploy a Prod (Render)
