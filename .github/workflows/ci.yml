@@ -133,7 +133,6 @@ jobs:
           target: 'https://miapp-dev.onrender.com'
           rules_file_name: '.zap/rules.tsv'
           fail_action: true
-          fail_threshold: 'High'
           artifact_name: 'zap-baseline-report'
 
       - name: Subir reporte ZAP
