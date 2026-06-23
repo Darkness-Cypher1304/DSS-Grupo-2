@@ -8,6 +8,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   test:
     name: Tests + Análisis de Seguridad
