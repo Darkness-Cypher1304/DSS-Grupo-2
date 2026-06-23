@@ -158,6 +158,7 @@ jobs:
 
           high_count = 0
           medium_count = 0
+          low_count = 0
 
           blacklist = {
               "40018",  # SQL Injection
@@ -173,13 +174,16 @@ jobs:
 
                   plugin_id = str(alert.get("pluginid", ""))
 
-                  risk = str(alert.get("riskdesc", "")).lower()
+                  riskcode = int(alert.get("riskcode", 0))
 
-                  if "high" in risk:
+                  if riskcode == 3:
                       high_count += 1
 
-                  elif "medium" in risk:
+                  elif riskcode == 2:
                       medium_count += 1
+
+                  elif riskcode == 1:
+                      low_count += 1
 
                   if plugin_id in blacklist:
                       found_blacklist.add(plugin_id)
@@ -187,6 +191,7 @@ jobs:
           print("=== RESUMEN SECURITY GATE ===")
           print(f"High encontrados: {high_count}")
           print(f"Medium encontrados: {medium_count}")
+          print(f"Low encontrados: {low_count}")
           print(f"Blacklist encontrados: {len(found_blacklist)}")
 
           if found_blacklist:
@@ -195,7 +200,7 @@ jobs:
                   print(f" - {vuln}")
               sys.exit(1)
 
-          if high_count >= 1:
+          if high_count > 0:
               print("\nSe detectaron vulnerabilidades HIGH")
               sys.exit(1)
 
