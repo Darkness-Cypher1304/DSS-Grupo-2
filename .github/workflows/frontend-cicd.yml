@@ -66,13 +66,38 @@ jobs:
         continue-on-error: true
 
   # ============================================================
+  # JOB 1.5: Detectar si los deploy-hooks están configurados
+  # (los secrets no se pueden usar en `if:` de job; se exponen como output)
+  # ============================================================
+  config:
+    name: Verificar configuración de deploy
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      has_dev_hook: ${{ steps.c.outputs.has_dev_hook }}
+      has_prod_hook: ${{ steps.c.outputs.has_prod_hook }}
+    steps:
+      - name: Evaluar secrets de deploy
+        id: c
+        env:
+          DEV_HOOK: ${{ secrets.RENDER_FRONTEND_DEV_HOOK }}
+          PROD_HOOK: ${{ secrets.RENDER_FRONTEND_PROD_HOOK }}
+        run: |
+          if [ -n "$DEV_HOOK" ]; then echo "has_dev_hook=true" >> "$GITHUB_OUTPUT"; else echo "has_dev_hook=false" >> "$GITHUB_OUTPUT"; echo "⏭️  RENDER_FRONTEND_DEV_HOOK no configurado — se omitirá el deploy a Dev."; fi
+          if [ -n "$PROD_HOOK" ]; then echo "has_prod_hook=true" >> "$GITHUB_OUTPUT"; else echo "has_prod_hook=false" >> "$GITHUB_OUTPUT"; echo "⏭️  RENDER_FRONTEND_PROD_HOOK no configurado — se omitirá el deploy a Prod."; fi
+
+  # ============================================================
   # JOB 2: Deploy a Desarrollo
+  # Solo corre si el deploy-hook está configurado (si no, se SALTA → no rompe CI).
+  # Al saltarse, smoke-test y deploy-prod (que dependen de él) también se saltan.
   # ============================================================
   deploy-dev:
     name: Deploy a Desarrollo
-    needs: test
+    needs: config
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    if: |
+      (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') &&
+      needs.config.outputs.has_dev_hook == 'true'
 
     environment:
       name: development
@@ -80,8 +105,10 @@ jobs:
 
     steps:
       - name: Deploy a Dev (Render)
+        env:
+          HOOK: ${{ secrets.RENDER_FRONTEND_DEV_HOOK }}
         run: |
-          curl -X POST ${{ secrets.RENDER_FRONTEND_DEV_HOOK }}
+          curl -fsS -X POST "$HOOK"
           echo "Deploy a Dev disparado"
 
       - name: Esperar que Render inicie
@@ -116,9 +143,9 @@ jobs:
   # ============================================================
   deploy-prod:
     name: Deploy a Producción
-    needs: smoke-test
+    needs: [config, smoke-test]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && needs.config.outputs.has_prod_hook == 'true'
 
     environment:
       name: production
@@ -126,8 +153,10 @@ jobs:
 
     steps:
       - name: Deploy a Prod (Render)
+        env:
+          HOOK: ${{ secrets.RENDER_FRONTEND_PROD_HOOK }}
         run: |
-          curl -X POST ${{ secrets.RENDER_FRONTEND_PROD_HOOK }}
+          curl -fsS -X POST "$HOOK"
           echo "Deploy a Producción disparado"
 
       - name: Resumen
