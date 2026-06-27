@@ -22,7 +22,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
-import { randomBytes, randomUUID, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { User, UserRole, UserStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -274,27 +274,36 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token inválido o expirado');
     }
 
-    // 2) Verificar que existe en BD y no está revocado
-    const tokenHash = await bcrypt.hash(refreshToken, 1); // hash para búsqueda
-    const stored = await this.prisma.refreshToken.findFirst({
-      where: { userId: payload.sub, revokedAt: null, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: 'desc' },
-    });
+    // 2) Localizar el registro que corresponde EXACTAMENTE al token presentado.
+    //    Se busca por igualdad de hash SHA-256 (determinista, sin sal). Antes se
+    //    usaba bcrypt, pero bcrypt trunca la entrada a 72 bytes y un refresh JWT
+    //    es mucho más largo: los primeros 72 bytes (header + inicio del claim
+    //    `sub`) son IDÉNTICOS entre todos los tokens del mismo usuario, así que
+    //    cualquier token "coincidía" con cualquier hash → la revocación y la
+    //    detección de reuse no funcionaban. SHA-256 vincula al token exacto.
+    const tokenHash = this.hashToken(refreshToken);
+    const matched = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
 
-    if (!stored) {
+    // Token no reconocido (o de otro usuario) → inválido
+    if (!matched || matched.userId !== payload.sub) {
       throw new UnauthorizedException('Refresh token no encontrado');
     }
 
-    // Comparación timing-safe del hash
-    const storedMatches = await bcrypt.compare(refreshToken, stored.tokenHash);
-    if (!storedMatches) {
-      // Posible token reuse attack — invalidamos toda la familia
-      this.logger.warn(`Posible reuse de refresh token para userId=${payload.sub}`);
+    // Token YA revocado → posible reuse attack: revocamos toda la familia
+    if (matched.revokedAt) {
+      this.logger.warn(
+        `Reuse de refresh token revocado para userId=${payload.sub} family=${matched.family}`,
+      );
       await this.prisma.refreshToken.updateMany({
-        where: { family: stored.family },
+        where: { family: matched.family, revokedAt: null },
         data: { revokedAt: new Date(), revokedReason: 'POTENTIAL_REUSE_DETECTED' },
       });
       throw new UnauthorizedException('Token comprometido — sesión revocada');
+    }
+
+    // Token expirado en BD (defensa extra además de la verificación de firma)
+    if (matched.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Refresh token expirado');
     }
 
     // 3) Cargar usuario
@@ -303,13 +312,13 @@ export class AuthService {
       throw new UnauthorizedException('Usuario no disponible');
     }
 
-    // 4) Revocar el refresh anterior y emitir uno nuevo (rotación)
+    // 4) Revocar el refresh presentado y emitir uno nuevo en la misma familia
     await this.prisma.refreshToken.update({
-      where: { id: stored.id },
+      where: { id: matched.id },
       data: { revokedAt: new Date(), revokedReason: 'ROTATED' },
     });
 
-    const tokens = await this.issueTokens(user, ip, userAgent, stored.family);
+    const tokens = await this.issueTokens(user, ip, userAgent, matched.family);
 
     return {
       user: {
@@ -332,19 +341,15 @@ export class AuthService {
     const accessTtl = parseInt(this.config.get('JWT_ACCESS_EXPIRATION_SECONDS', '900'), 10);
     await this.redis.blacklistJwt(jti, accessTtl);
 
-    // 2) Revocar refresh token (si vino)
+    // 2) Revocar refresh token (si vino) — búsqueda exacta por hash SHA-256
     if (refreshToken) {
-      const tokens = await this.prisma.refreshToken.findMany({
-        where: { userId, revokedAt: null },
-      });
-      for (const t of tokens) {
-        if (await bcrypt.compare(refreshToken, t.tokenHash)) {
-          await this.prisma.refreshToken.update({
-            where: { id: t.id },
-            data: { revokedAt: new Date(), revokedReason: 'USER_LOGOUT' },
-          });
-          break;
-        }
+      const tokenHash = this.hashToken(refreshToken);
+      const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
+      if (stored && stored.userId === userId && !stored.revokedAt) {
+        await this.prisma.refreshToken.update({
+          where: { id: stored.id },
+          data: { revokedAt: new Date(), revokedReason: 'USER_LOGOUT' },
+        });
       }
     }
 
@@ -519,6 +524,100 @@ export class AuthService {
   }
 
   // ==========================================================================
+  // SESIONES ACTIVAS (dispositivos)
+  // ==========================================================================
+  /**
+   * Lista las sesiones activas (refresh tokens vigentes) del usuario.
+   * Marca cuál es la sesión actual comparando el hash SHA-256 del refresh
+   * token presentado en la cookie. NUNCA devuelve el hash del token.
+   */
+  async listSessions(userId: string, currentRefreshToken?: string) {
+    const currentHash = currentRefreshToken ? this.hashToken(currentRefreshToken) : null;
+
+    const sessions = await this.prisma.refreshToken.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        ipAddress: true,
+        userAgent: true,
+        createdAt: true,
+        expiresAt: true,
+        tokenHash: true,
+      },
+    });
+
+    return sessions.map((s) => ({
+      id: s.id,
+      ipAddress: s.ipAddress,
+      userAgent: s.userAgent,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      isCurrent: currentHash !== null && s.tokenHash === currentHash,
+    }));
+  }
+
+  /**
+   * Cierra una sesión específica del usuario (revoca su refresh token).
+   * Solo el dueño puede hacerlo; devuelve 404 si la sesión no es suya
+   * (no revelamos existencia de sesiones ajenas).
+   */
+  async revokeSession(userId: string, sessionId: string): Promise<{ message: string }> {
+    const session = await this.prisma.refreshToken.findUnique({ where: { id: sessionId } });
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException('Sesión no encontrada');
+    }
+
+    if (!session.revokedAt) {
+      await this.prisma.refreshToken.update({
+        where: { id: sessionId },
+        data: { revokedAt: new Date(), revokedReason: 'USER_REVOKED_SESSION' },
+      });
+    }
+
+    await this.audit.log({
+      userId,
+      action: 'USER_LOGOUT',
+      entityType: 'RefreshToken',
+      entityId: sessionId,
+      ipAddress: 'unknown',
+      success: true,
+      metadata: { event: 'session_revoked' },
+    });
+
+    return { message: 'Sesión cerrada' };
+  }
+
+  /**
+   * Cierra la sesión en TODOS los dispositivos: revoca todos los refresh tokens
+   * del usuario y pone el access token actual en la blacklist de Redis para que
+   * la invalidación sea inmediata (los demás dispositivos no podrán renovar y
+   * caen al expirar el access ~15 min).
+   */
+  async revokeAllSessions(userId: string, currentJti?: string): Promise<{ revoked: number }> {
+    const result = await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'USER_REVOKED_ALL' },
+    });
+
+    if (currentJti) {
+      const accessTtl = parseInt(this.config.get('JWT_ACCESS_EXPIRATION_SECONDS', '900'), 10);
+      await this.redis.blacklistJwt(currentJti, accessTtl);
+    }
+
+    await this.audit.log({
+      userId,
+      action: 'USER_LOGOUT',
+      entityType: 'RefreshToken',
+      ipAddress: 'unknown',
+      success: true,
+      metadata: { event: 'revoke_all_sessions', revoked: result.count },
+    });
+
+    return { revoked: result.count };
+  }
+
+  // ==========================================================================
   // HELPERS PRIVADOS
   // ==========================================================================
   private async issueTokens(
@@ -554,8 +653,10 @@ export class AuthService {
       },
     );
 
-    // Guardar HASH del refresh token en BD
-    const tokenHash = await bcrypt.hash(refreshToken, 10);
+    // Guardar HASH del refresh token en BD (SHA-256: determinista y sin truncar,
+    // a diferencia de bcrypt que recorta a 72 bytes). Permite búsqueda exacta
+    // por el índice @unique de tokenHash y revocación fiable por-token.
+    const tokenHash = this.hashToken(refreshToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 días
 
     await this.prisma.refreshToken.create({
@@ -594,13 +695,11 @@ export class AuthService {
   }
 
   /**
-   * Comparación timing-safe genérica (para tokens en memoria).
-   * Para passwords usamos bcrypt.compare (ya es timing-safe).
+   * Hash determinista (SHA-256) del refresh token para almacenarlo y buscarlo
+   * por igualdad exacta. Apropiado porque el token es de alta entropía (JWT
+   * firmado); no se usa bcrypt porque trunca a 72 bytes y rompe la unicidad.
    */
-  private safeCompare(a: string, b: string): boolean {
-    if (a.length !== b.length) return false;
-    const aBuf = Buffer.from(a);
-    const bBuf = Buffer.from(b);
-    return timingSafeEqual(aBuf, bBuf);
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 }

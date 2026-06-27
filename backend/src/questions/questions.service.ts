@@ -92,6 +92,19 @@ export class QuestionsService {
 
     if (!result) throw new NotFoundException('Consulta no encontrada');
 
+    // Control de acceso en capa de aplicación (defensa independiente del RLS):
+    // replica la política RLS questions_visibility. Cierra IDOR (OWASP A01)
+    // aunque el RLS no esté activo en la conexión actual.
+    // Devolvemos 404 (no 403) para no revelar que el recurso existe.
+    const canView =
+      role === UserRole.ADMIN ||
+      (role === UserRole.PARENT && result.authorId === userId) ||
+      (role === UserRole.SPECIALIST &&
+        (result.assignedToId === userId ||
+          (result.assignedToId === null && result.status === QuestionStatus.OPEN)));
+
+    if (!canView) throw new NotFoundException('Consulta no encontrada');
+
     // Si es anónima, ocultar autor a especialistas (no admin)
     if (result.isAnonymous && role === UserRole.SPECIALIST) {
       result.author = { id: 'anonymous', fullName: 'Padre (anónimo)' };

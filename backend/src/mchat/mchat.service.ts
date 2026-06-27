@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { MchatRiskLevel } from '@prisma/client';
+import { MchatRiskLevel, UserRole } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -125,6 +125,15 @@ export class MchatService {
     );
 
     if (!screening) throw new NotFoundException('Evaluación no encontrada');
+
+    // Control de acceso en capa de aplicación (defensa independiente del RLS):
+    // solo el padre dueño o un admin pueden ver la evaluación. Cierra IDOR
+    // (OWASP A01) aunque el RLS no esté activo en la conexión actual.
+    // Devolvemos 404 (no 403) para no revelar que el recurso existe.
+    if (screening.parentId !== parentId && parentRole !== UserRole.ADMIN) {
+      throw new NotFoundException('Evaluación no encontrada');
+    }
+
     return screening;
   }
 }
