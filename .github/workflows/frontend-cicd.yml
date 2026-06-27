@@ -1,0 +1,139 @@
+# ============================================================
+# NeuroAlert · Frontend · CI/CD Pipeline
+# Siguiendo la guía del curso: Tests → Deploy Dev → Smoke → Deploy Prod
+# ============================================================
+# SECRETS necesarios en GitHub (Settings → Secrets → Actions):
+#   RENDER_FRONTEND_DEV_HOOK   → Deploy hook del frontend DEV en Render
+#   RENDER_FRONTEND_PROD_HOOK  → Deploy hook del frontend PROD en Render
+# ============================================================
+
+name: Frontend CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-cicd.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'frontend/**'
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+
+  # ============================================================
+  # JOB 1: Tests + Build + Análisis de seguridad
+  # ============================================================
+  test:
+    name: Tests + Análisis de Seguridad
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Type check (TypeScript)
+        run: npm run type-check
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: Build de producción
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL || 'https://neuroalert-backend-prod.onrender.com' }}
+        run: npm run build
+
+      - name: Análisis de seguridad (npm audit)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  # ============================================================
+  # JOB 2: Deploy a Desarrollo
+  # ============================================================
+  deploy-dev:
+    name: Deploy a Desarrollo
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+
+    environment:
+      name: development
+      url: https://neuroalert-frontend-dev.onrender.com
+
+    steps:
+      - name: Deploy a Dev (Render)
+        run: |
+          curl -X POST ${{ secrets.RENDER_FRONTEND_DEV_HOOK }}
+          echo "Deploy a Dev disparado"
+
+      - name: Esperar que Render inicie
+        run: sleep 30
+
+  # ============================================================
+  # JOB 3: Smoke Test en Dev
+  # ============================================================
+  smoke-test:
+    name: Smoke Test en Dev
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verificar que Dev responde
+        run: |
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              https://neuroalert-frontend-dev.onrender.com)
+            if [[ $STATUS -eq 200 ]]; then
+              echo "Dev responde correctamente (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Intento $i fallido (HTTP $STATUS), reintentando..."
+            sleep 15
+          done
+          echo "Dev no responde despues de 5 intentos"
+          exit 1
+
+  # ============================================================
+  # JOB 4: Deploy a Producción
+  # ============================================================
+  deploy-prod:
+    name: Deploy a Producción
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    environment:
+      name: production
+      url: https://neuroalert-frontend-prod.onrender.com
+
+    steps:
+      - name: Deploy a Prod (Render)
+        run: |
+          curl -X POST ${{ secrets.RENDER_FRONTEND_PROD_HOOK }}
+          echo "Deploy a Producción disparado"
+
+      - name: Resumen
+        run: |
+          echo "============================================"
+          echo "NeuroAlert Frontend - Deploy completado"
+          echo "DEV:  https://neuroalert-frontend-dev.onrender.com"
+          echo "PROD: https://neuroalert-frontend-prod.onrender.com"
+          echo "============================================"

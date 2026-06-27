@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
@@ -17,7 +17,7 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { login } = useAuth();
@@ -35,7 +35,6 @@ export default function LoginPage() {
     try {
       const user = await login(values.email, values.password);
 
-      // Redirigir según rol
       const redirect = searchParams.get('redirect');
       if (redirect) {
         router.push(redirect);
@@ -55,6 +54,67 @@ export default function LoginPage() {
   }
 
   return (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-5" noValidate>
+      <div>
+        <label htmlFor="email" className="label">Correo electrónico</label>
+        <input
+          id="email"
+          type="email"
+          autoComplete="email"
+          placeholder="tu@correo.com"
+          className="input"
+          {...register('email')}
+        />
+        {errors.email && (
+          <p className="text-xs text-coral-600 mt-1.5">{errors.email.message}</p>
+        )}
+      </div>
+
+      <div>
+        <div className="flex justify-between items-center">
+          <label htmlFor="password" className="label">Contraseña</label>
+          <Link href="/forgot-password" className="text-xs text-teal-700 hover:underline">
+            ¿La olvidaste?
+          </Link>
+        </div>
+        <div className="relative">
+          <input
+            id="password"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="current-password"
+            placeholder="••••••••••••"
+            className="input pr-12"
+            {...register('password')}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((s) => !s)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-mute hover:text-ink-soft"
+            aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+          >
+            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </div>
+        {errors.password && (
+          <p className="text-xs text-coral-600 mt-1.5">{errors.password.message}</p>
+        )}
+      </div>
+
+      {serverError && (
+        <div className="rounded-xl bg-coral-50 border border-coral-200 px-4 py-3 text-sm text-coral-800">
+          {serverError}
+        </div>
+      )}
+
+      <button type="submit" disabled={isSubmitting} className="btn-primary w-full py-3 text-base">
+        {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : 'Iniciar sesión'}
+      </button>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
     <main className="min-h-screen grid lg:grid-cols-2">
       {/* Lado izquierdo: formulario */}
       <div className="flex flex-col justify-center p-8 md:p-16 bg-bone-50">
@@ -73,62 +133,9 @@ export default function LoginPage() {
             Inicia sesión para continuar con tu evaluación o consultas.
           </p>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5" noValidate>
-            <div>
-              <label htmlFor="email" className="label">Correo electrónico</label>
-              <input
-                id="email"
-                type="email"
-                autoComplete="email"
-                placeholder="tu@correo.com"
-                className="input"
-                {...register('email')}
-              />
-              {errors.email && (
-                <p className="text-xs text-coral-600 mt-1.5">{errors.email.message}</p>
-              )}
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center">
-                <label htmlFor="password" className="label">Contraseña</label>
-                <Link href="/forgot-password" className="text-xs text-teal-700 hover:underline">
-                  ¿La olvidaste?
-                </Link>
-              </div>
-              <div className="relative">
-                <input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="current-password"
-                  placeholder="••••••••••••"
-                  className="input pr-12"
-                  {...register('password')}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((s) => !s)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-mute hover:text-ink-soft"
-                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-              {errors.password && (
-                <p className="text-xs text-coral-600 mt-1.5">{errors.password.message}</p>
-              )}
-            </div>
-
-            {serverError && (
-              <div className="rounded-xl bg-coral-50 border border-coral-200 px-4 py-3 text-sm text-coral-800">
-                {serverError}
-              </div>
-            )}
-
-            <button type="submit" disabled={isSubmitting} className="btn-primary w-full py-3 text-base">
-              {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : 'Iniciar sesión'}
-            </button>
-          </form>
+          <Suspense fallback={<div className="h-64 animate-pulse bg-gray-100 rounded-xl" />}>
+            <LoginForm />
+          </Suspense>
 
           <p className="mt-8 text-sm text-ink-mute text-center">
             ¿No tienes cuenta?{' '}
