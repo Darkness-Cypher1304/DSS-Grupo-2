@@ -198,20 +198,46 @@ export class AuthController {
   // HELPERS PRIVADOS — Cookie HttpOnly para refresh token
   // ==========================================================================
   private setRefreshCookie(res: Response, refreshToken: string): void {
-    const isProd = this.config.get('NODE_ENV') === 'production';
-    const secureCookie = this.config.get('COOKIE_SECURE', 'false') === 'true' || isProd;
-
     res.cookie(REFRESH_COOKIE_NAME, refreshToken, {
-      httpOnly: true,            // JS no puede leerla → previene XSS
-      secure: secureCookie,      // Solo HTTPS en prod
-      sameSite: 'strict',        // Previene CSRF
-      path: '/api/auth',         // limitada a auth endpoints
+      ...this.refreshCookieBaseOptions(),
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
-      signed: true,              // firma con cookie-parser
+      signed: true, // firma con cookie-parser
     });
   }
 
   private clearRefreshCookie(res: Response): void {
-    res.clearCookie(REFRESH_COOKIE_NAME, { path: '/api/auth' });
+    res.clearCookie(REFRESH_COOKIE_NAME, this.refreshCookieBaseOptions());
+  }
+
+  /**
+   * Opciones base de la cookie de refresh, configurables por entorno.
+   * En producción el frontend y el backend viven en subdominios distintos de
+   * onrender.com (cross-site) → se necesita SameSite=None + Secure + domain.
+   * En local, Strict basta. Se leen de COOKIE_SAMESITE / COOKIE_DOMAIN /
+   * COOKIE_SECURE (definidas en render.yaml).
+   */
+  private refreshCookieBaseOptions(): {
+    httpOnly: boolean;
+    secure: boolean;
+    sameSite: 'strict' | 'lax' | 'none';
+    domain?: string;
+    path: string;
+  } {
+    const isProd = this.config.get('NODE_ENV') === 'production';
+    const sameSite = this.config
+      .get<string>('COOKIE_SAMESITE', 'strict')
+      .toLowerCase() as 'strict' | 'lax' | 'none';
+    // Regla del navegador: SameSite=None EXIGE Secure=true.
+    const secure =
+      this.config.get('COOKIE_SECURE', 'false') === 'true' || isProd || sameSite === 'none';
+    const domain = this.config.get<string>('COOKIE_DOMAIN') || undefined;
+
+    return {
+      httpOnly: true, // JS no puede leerla → previene XSS
+      secure, // solo HTTPS
+      sameSite, // CSRF: strict en local, none en prod cross-site
+      domain, // p.ej. .onrender.com en prod
+      path: '/api/auth', // limitada a los endpoints de auth
+    };
   }
 }
