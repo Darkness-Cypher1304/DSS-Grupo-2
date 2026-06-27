@@ -71,6 +71,9 @@ infra/minio-data/
 **/postgres-data/
 **/redis-data/
 **/minio-data/
+# Excepción: estos son archivos FUENTE, no datos de runtime (la regla **/data/ los ignoraba por error)
+!backend/src/mchat/data/
+!backend/src/mchat/data/**
 
 # ============================================================
 # Prisma
