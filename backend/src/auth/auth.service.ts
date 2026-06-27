@@ -524,6 +524,100 @@ export class AuthService {
   }
 
   // ==========================================================================
+  // SESIONES ACTIVAS (dispositivos)
+  // ==========================================================================
+  /**
+   * Lista las sesiones activas (refresh tokens vigentes) del usuario.
+   * Marca cuál es la sesión actual comparando el hash SHA-256 del refresh
+   * token presentado en la cookie. NUNCA devuelve el hash del token.
+   */
+  async listSessions(userId: string, currentRefreshToken?: string) {
+    const currentHash = currentRefreshToken ? this.hashToken(currentRefreshToken) : null;
+
+    const sessions = await this.prisma.refreshToken.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        ipAddress: true,
+        userAgent: true,
+        createdAt: true,
+        expiresAt: true,
+        tokenHash: true,
+      },
+    });
+
+    return sessions.map((s) => ({
+      id: s.id,
+      ipAddress: s.ipAddress,
+      userAgent: s.userAgent,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      isCurrent: currentHash !== null && s.tokenHash === currentHash,
+    }));
+  }
+
+  /**
+   * Cierra una sesión específica del usuario (revoca su refresh token).
+   * Solo el dueño puede hacerlo; devuelve 404 si la sesión no es suya
+   * (no revelamos existencia de sesiones ajenas).
+   */
+  async revokeSession(userId: string, sessionId: string): Promise<{ message: string }> {
+    const session = await this.prisma.refreshToken.findUnique({ where: { id: sessionId } });
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException('Sesión no encontrada');
+    }
+
+    if (!session.revokedAt) {
+      await this.prisma.refreshToken.update({
+        where: { id: sessionId },
+        data: { revokedAt: new Date(), revokedReason: 'USER_REVOKED_SESSION' },
+      });
+    }
+
+    await this.audit.log({
+      userId,
+      action: 'USER_LOGOUT',
+      entityType: 'RefreshToken',
+      entityId: sessionId,
+      ipAddress: 'unknown',
+      success: true,
+      metadata: { event: 'session_revoked' },
+    });
+
+    return { message: 'Sesión cerrada' };
+  }
+
+  /**
+   * Cierra la sesión en TODOS los dispositivos: revoca todos los refresh tokens
+   * del usuario y pone el access token actual en la blacklist de Redis para que
+   * la invalidación sea inmediata (los demás dispositivos no podrán renovar y
+   * caen al expirar el access ~15 min).
+   */
+  async revokeAllSessions(userId: string, currentJti?: string): Promise<{ revoked: number }> {
+    const result = await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'USER_REVOKED_ALL' },
+    });
+
+    if (currentJti) {
+      const accessTtl = parseInt(this.config.get('JWT_ACCESS_EXPIRATION_SECONDS', '900'), 10);
+      await this.redis.blacklistJwt(currentJti, accessTtl);
+    }
+
+    await this.audit.log({
+      userId,
+      action: 'USER_LOGOUT',
+      entityType: 'RefreshToken',
+      ipAddress: 'unknown',
+      success: true,
+      metadata: { event: 'revoke_all_sessions', revoked: result.count },
+    });
+
+    return { revoked: result.count };
+  }
+
+  // ==========================================================================
   // HELPERS PRIVADOS
   // ==========================================================================
   private async issueTokens(

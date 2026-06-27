@@ -9,9 +9,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Req,
   Res,
@@ -192,6 +194,46 @@ export class AuthController {
       email: user.email,
       role: user.role,
     };
+  }
+
+  // --------------------------------------------------------------------------
+  // GET /auth/sessions — listar sesiones activas (dispositivos) del usuario
+  // --------------------------------------------------------------------------
+  @Get('sessions')
+  @ApiOperation({ summary: 'Listar sesiones activas del usuario (dispositivos)' })
+  listSessions(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    const refreshToken = (req.signedCookies as Record<string, string> | undefined)?.[
+      REFRESH_COOKIE_NAME
+    ];
+    return this.authService.listSessions(user.sub, refreshToken);
+  }
+
+  // --------------------------------------------------------------------------
+  // DELETE /auth/sessions/:id — cerrar una sesión específica
+  // --------------------------------------------------------------------------
+  @HttpCode(HttpStatus.OK)
+  @Delete('sessions/:id')
+  @ApiOperation({ summary: 'Cerrar una sesión específica (revocar ese dispositivo)' })
+  revokeSession(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.authService.revokeSession(user.sub, id);
+  }
+
+  // --------------------------------------------------------------------------
+  // POST /auth/sessions/revoke-all — cerrar sesión en TODOS los dispositivos
+  // --------------------------------------------------------------------------
+  @HttpCode(HttpStatus.OK)
+  @Post('sessions/revoke-all')
+  @ApiOperation({ summary: 'Cerrar sesión en todos los dispositivos' })
+  async revokeAllSessions(
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ revoked: number; message: string }> {
+    const result = await this.authService.revokeAllSessions(user.sub, user.jti);
+
+    // La sesión actual también queda cerrada → limpiar su cookie de refresh.
+    this.clearRefreshCookie(res);
+
+    return { revoked: result.revoked, message: 'Sesión cerrada en todos los dispositivos' };
   }
 
   // ==========================================================================
