@@ -99,7 +99,10 @@ export class AuthController {
     @ClientIp() ip: string,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE_NAME];
+    // La cookie se emite con `signed: true`, por lo que cookie-parser la coloca
+    // en `req.signedCookies` (NO en `req.cookies`). Leer de `req.cookies` aquí
+    // devolvía siempre undefined → el refresh fallaba y la sesión no persistía.
+    const refreshToken = (req.signedCookies as Record<string, string> | undefined)?.[REFRESH_COOKIE_NAME];
     const userAgent = req.headers['user-agent'] || 'unknown';
 
     const result = await this.authService.refresh(refreshToken!, ip, userAgent);
@@ -123,7 +126,7 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ message: string }> {
-    const refreshToken = (req.cookies as Record<string, string> | undefined)?.[REFRESH_COOKIE_NAME];
+    const refreshToken = (req.signedCookies as Record<string, string> | undefined)?.[REFRESH_COOKIE_NAME];
     await this.authService.logout(user.sub, user.jti, refreshToken);
 
     this.clearRefreshCookie(res);
