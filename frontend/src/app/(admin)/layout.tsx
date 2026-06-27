@@ -3,9 +3,10 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Home, Users, FileText, ShieldCheck, LogOut, Loader2 } from 'lucide-react';
+import { Home, Users, FileText, ShieldCheck, LogOut } from 'lucide-react';
 
 import { useAuth } from '@/lib/auth-context';
+import { NeuroLoader } from '@/components/neuro-loader';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
@@ -17,15 +18,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     }
   }, [loading, user, router]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-bone-50">
-        <Loader2 size={32} className="animate-spin text-teal-700" />
-      </div>
-    );
+  if (loading || !user || user.role !== 'ADMIN') {
+    return <NeuroLoader message="Verificando acceso…" />;
   }
-
-  if (!user || user.role !== 'ADMIN') return null;
 
   return (
     <div className="min-h-screen bg-bone-50 flex">
