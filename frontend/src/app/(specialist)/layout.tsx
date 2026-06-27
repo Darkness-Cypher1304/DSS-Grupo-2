@@ -3,9 +3,10 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Home, MessageCircle, FileText, LogOut, Loader2, Stethoscope } from 'lucide-react';
+import { Home, MessageCircle, FileText, LogOut, Stethoscope } from 'lucide-react';
 
 import { useAuth } from '@/lib/auth-context';
+import { NeuroLoader } from '@/components/neuro-loader';
 
 export default function SpecialistLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
@@ -17,15 +18,9 @@ export default function SpecialistLayout({ children }: { children: React.ReactNo
     }
   }, [loading, user, router]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-bone-50">
-        <Loader2 size={32} className="animate-spin text-teal-700" />
-      </div>
-    );
+  if (loading || !user || user.role !== 'SPECIALIST') {
+    return <NeuroLoader message="Verificando acceso…" />;
   }
-
-  if (!user || user.role !== 'SPECIALIST') return null;
 
   return (
     <div className="min-h-screen bg-bone-50 flex">

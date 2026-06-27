@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { Brain, Eye, EyeOff, Loader2 } from 'lucide-react';
 
 import { useAuth } from '@/lib/auth-context';
+import { NeuroLoader } from '@/components/neuro-loader';
+import type { UserRole } from '@/lib/api-client';
 
 const loginSchema = z.object({
   email: z.string().email('Correo electrónico inválido').max(255),
@@ -17,10 +19,29 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
+/** Ruta por defecto según el rol. */
+function defaultHome(role: UserRole): string {
+  if (role === 'PARENT') return '/dashboard';
+  if (role === 'SPECIALIST') return '/specialist';
+  return '/admin';
+}
+
+/**
+ * Solo se honra un `?redirect=` si es una ruta interna Y corresponde al rol.
+ * Evita el rebote infinito (p.ej. un PADRE enviado a /admin) y open-redirects.
+ */
+function canAccess(path: string, role: UserRole): boolean {
+  if (!path.startsWith('/') || path.startsWith('//')) return false; // solo rutas internas
+  if (path.startsWith('/admin')) return role === 'ADMIN';
+  if (path.startsWith('/specialist')) return role === 'SPECIALIST';
+  if (/^\/(dashboard|mchat|signals|ask|resources)(\/|\?|$)/.test(path)) return role === 'PARENT';
+  return true; // áreas compartidas (/, /articles, …)
+}
+
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { login } = useAuth();
+  const { login, user } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
@@ -30,27 +51,32 @@ function LoginForm() {
     formState: { errors, isSubmitting },
   } = useForm<LoginFormValues>({ resolver: zodResolver(loginSchema) });
 
+  // Redirección unificada: en cuanto hay usuario (al loguear o si ya había sesión),
+  // vamos a la ruta pedida SOLO si su rol la permite; si no, a su inicio por rol.
+  // `replace` evita que "atrás" regrese al login.
+  useEffect(() => {
+    if (!user) return;
+    const redirect = searchParams.get('redirect');
+    const target = redirect && canAccess(redirect, user.role) ? redirect : defaultHome(user.role);
+    router.replace(target);
+  }, [user, searchParams, router]);
+
   async function onSubmit(values: LoginFormValues) {
     setServerError(null);
     try {
-      const user = await login(values.email, values.password);
-
-      const redirect = searchParams.get('redirect');
-      if (redirect) {
-        router.push(redirect);
-      } else if (user.role === 'PARENT') {
-        router.push('/dashboard');
-      } else if (user.role === 'SPECIALIST') {
-        router.push('/specialist');
-      } else {
-        router.push('/admin');
-      }
+      await login(values.email, values.password);
+      // El redirect lo maneja el useEffect cuando `user` queda seteado (validado por rol).
     } catch (err) {
       const error = err as { response?: { data?: { message?: string } } };
       setServerError(
         error.response?.data?.message || 'No pudimos iniciar sesión. Verifica tus datos.',
       );
     }
+  }
+
+  // Mientras autentica o redirige, mostramos el overlay (evita el "flash en blanco").
+  if (isSubmitting || user) {
+    return <NeuroLoader message={user ? 'Entrando…' : 'Verificando credenciales…'} />;
   }
 
   return (
