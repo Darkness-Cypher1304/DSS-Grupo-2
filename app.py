@@ -19,7 +19,6 @@ migrate = Migrate(app, db)
 
 # ---------------------------------------------------------------------------
 # Modelo de ejemplo: Mensaje
-# Demuestra persistencia REAL en la base de datos (se guarda y se lee).
 # ---------------------------------------------------------------------------
 class Mensaje(db.Model):
     __tablename__ = 'mensajes'
@@ -39,9 +38,22 @@ class Mensaje(db.Model):
         }
 
 
-# Crear la tabla si no existe (demo; en producción real -> migraciones).
 with app.app_context():
     db.create_all()
+
+
+# ---------------------------------------------------------------------------
+# Headers de seguridad HTTP — corrige alertas MEDIUM/LOW de ZAP
+# ---------------------------------------------------------------------------
+@app.after_request
+def set_security_headers(response):
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+    response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return response
 
 
 # Endpoint principal
@@ -55,8 +67,6 @@ def hello():
     })
 
 
-# Versión + commit desplegado: cambia en cada deploy, así se OBSERVA que la
-# nueva versión del código está viva (Render inyecta RENDER_GIT_COMMIT).
 @app.route('/version')
 def version():
     return jsonify({
@@ -65,13 +75,11 @@ def version():
     })
 
 
-# Smoke test endpoint
 @app.route('/health')
 def health():
     return jsonify({"status": "healthy"}), 200
 
 
-# DB test endpoint
 @app.route('/db-health')
 def db_health():
     try:
@@ -81,10 +89,6 @@ def db_health():
         return jsonify({"status": "db error", "detail": str(e)}), 500
 
 
-# ---------------------------------------------------------------------------
-# Mensajes: GET lista, POST crea. Los datos PERSISTEN en la BD real,
-# incluso entre reinicios y redeploys.
-# ---------------------------------------------------------------------------
 @app.route('/mensajes', methods=['GET'])
 def listar_mensajes():
     mensajes = Mensaje.query.order_by(Mensaje.id.desc()).all()
