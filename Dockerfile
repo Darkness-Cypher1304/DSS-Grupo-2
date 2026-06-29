@@ -48,10 +48,12 @@ COPY --from=builder --chown=nestjs:nodejs /app/dist        ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/prisma      ./prisma
 COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/docker-entrypoint.sh ./
 
 USER nestjs
 
 EXPOSE 4000
 
-# Ejecutar migraciones y luego arrancar la app
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main"]
+# Migraciones (con manejo de P3005) + seed idempotente + arranque.
+# La lógica vive en docker-entrypoint.sh (legible y mantenible).
+CMD ["sh", "./docker-entrypoint.sh"]
