@@ -7,7 +7,15 @@
 //   - SHA-256 hash para verificar integridad
 // ============================================================================
 
-import { Global, Injectable, Logger, Module, OnModuleInit, BadRequestException } from '@nestjs/common';
+import {
+  Global,
+  Injectable,
+  Logger,
+  Module,
+  OnModuleInit,
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Client } from 'minio';
 import { createHash, randomUUID } from 'crypto';
@@ -30,6 +38,9 @@ export class StorageService implements OnModuleInit {
   private client!: Client;
   private bucketName!: string;
   private presignedTtl!: number;
+  /** Si MinIO no está configurado, el storage queda deshabilitado (el backend
+   *  arranca igual; solo la subida de archivos no está disponible). */
+  private enabled = false;
 
   // Lista BLANCA de mime types permitidos
   private readonly ALLOWED_MIME_TYPES = new Set([
@@ -56,16 +67,32 @@ export class StorageService implements OnModuleInit {
   constructor(private readonly config: ConfigService) {}
 
   async onModuleInit(): Promise<void> {
+    const endPoint = this.config.get<string>('MINIO_ENDPOINT');
+    const accessKey = this.config.get<string>('MINIO_ROOT_USER');
+    const secretKey = this.config.get<string>('MINIO_ROOT_PASSWORD');
+
+    // Sin credenciales/endpoint → storage deshabilitado (no se construye el
+    // cliente, evitando el crash de arranque). El backend funciona sin MinIO.
+    if (!endPoint || !accessKey || !secretKey) {
+      this.enabled = false;
+      this.logger.warn(
+        '⚠️  MinIO no configurado — almacenamiento de archivos DESHABILITADO. ' +
+          'El resto del backend funciona normalmente.',
+      );
+      return;
+    }
+
     this.client = new Client({
-      endPoint: this.config.get<string>('MINIO_ENDPOINT', 'minio'),
+      endPoint,
       port: parseInt(this.config.get<string>('MINIO_PORT', '9000'), 10),
       useSSL: this.config.get<string>('MINIO_USE_SSL', 'false') === 'true',
-      accessKey: this.config.get<string>('MINIO_ROOT_USER')!,
-      secretKey: this.config.get<string>('MINIO_ROOT_PASSWORD')!,
+      accessKey,
+      secretKey,
     });
 
     this.bucketName = this.config.get<string>('MINIO_BUCKET_NAME', 'neuroalert-resources');
     this.presignedTtl = parseInt(this.config.get<string>('MINIO_PRESIGNED_URL_TTL', '900'), 10);
+    this.enabled = true;
 
     try {
       const exists = await this.client.bucketExists(this.bucketName);
@@ -87,6 +114,7 @@ export class StorageService implements OnModuleInit {
     originalFileName: string,
     folder: 'resources' | 'specialist-docs' | 'avatars',
   ): Promise<UploadInfo> {
+    this.assertEnabled();
     const sanitized = this.sanitizeFileName(originalFileName);
     const key = `${folder}/${randomUUID()}-${sanitized}`;
     const presignedUrl = await this.client.presignedPutObject(
@@ -101,6 +129,7 @@ export class StorageService implements OnModuleInit {
   // Generar URL pre-firmada para download
   // --------------------------------------------------------------------------
   async getPresignedDownloadUrl(key: string): Promise<string> {
+    this.assertEnabled();
     return this.client.presignedGetObject(this.bucketName, key, this.presignedTtl);
   }
 
@@ -108,6 +137,7 @@ export class StorageService implements OnModuleInit {
   // Eliminar archivo
   // --------------------------------------------------------------------------
   async deleteObject(key: string): Promise<void> {
+    this.assertEnabled();
     await this.client.removeObject(this.bucketName, key);
   }
 
@@ -115,6 +145,7 @@ export class StorageService implements OnModuleInit {
   // Validar magic bytes de un archivo subido (verificación post-upload)
   // --------------------------------------------------------------------------
   async validateUploadedFile(key: string, declaredMimeType: string): Promise<ValidatedFile> {
+    this.assertEnabled();
     if (!this.ALLOWED_MIME_TYPES.has(declaredMimeType)) {
       throw new BadRequestException(`Tipo de archivo no permitido: ${declaredMimeType}`);
     }
@@ -158,6 +189,17 @@ export class StorageService implements OnModuleInit {
       hash: hash.digest('hex'),
       size,
     };
+  }
+
+  // --------------------------------------------------------------------------
+  // Guard: lanza si el storage está deshabilitado (MinIO no configurado)
+  // --------------------------------------------------------------------------
+  private assertEnabled(): void {
+    if (!this.enabled) {
+      throw new ServiceUnavailableException(
+        'El almacenamiento de archivos no está disponible en este entorno.',
+      );
+    }
   }
 
   // --------------------------------------------------------------------------

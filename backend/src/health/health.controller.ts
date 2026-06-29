@@ -34,10 +34,9 @@ export class HealthController {
     }
 
     try {
-      await this.redis.getClient().ping();
-      checks.redis = true;
+      checks.cache = await this.redis.ping();
     } catch {
-      checks.redis = false;
+      checks.cache = false;
     }
 
     const healthy = Object.values(checks).every((v) => v);
