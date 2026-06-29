@@ -110,19 +110,22 @@ jobs:
     needs: deploy-dev
     runs-on: ubuntu-latest
     steps:
-      - name: Verificar que Dev responde
+      - name: Verificar que Dev responde Y es el backend NestJS
         run: |
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              https://miapp-dev.onrender.com/health)
-            if [[ $STATUS -eq 200 ]]; then
-              echo "Dev responde correctamente (HTTP $STATUS)"
+          # Verifica el CONTENIDO, no solo HTTP 200: el NestJS responde
+          # {"data":{...,"checks":{...}}}; la app anterior daba {"status":"healthy"}.
+          # Así evitamos el falso positivo de que la versión vieja siga sirviendo
+          # mientras un build nuevo falla. Damos margen al primer build de Docker.
+          for i in $(seq 1 18); do
+            BODY=$(curl -s --max-time 15 https://miapp-dev.onrender.com/health || true)
+            if echo "$BODY" | grep -q '"checks"'; then
+              echo "Dev OK (NestJS): $BODY"
               exit 0
             fi
-            echo "Intento $i fallido (HTTP $STATUS), reintentando..."
-            sleep 15
+            echo "Intento $i: aún no responde el NestJS (body: $(echo "$BODY" | head -c 80))…"
+            sleep 20
           done
-          echo "Dev no responde después de 10 intentos"
+          echo "Dev no respondió como NestJS tras los reintentos (¿build falló o sigue en curso?)"
           exit 1
   dast:
     name: DAST - OWASP ZAP
