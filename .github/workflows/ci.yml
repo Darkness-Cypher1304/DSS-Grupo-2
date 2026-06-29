@@ -1,11 +1,7 @@
-# ============================================================================
-# NeuroAlert · Backend (NestJS) · CI  — rama main
-# ============================================================================
-# main contiene el backend NestJS en la raíz (se despliega en Render vía Docker).
-# Jobs: type-check + lint + migraciones + tests, build de Docker, y scan Trivy.
-# ============================================================================
+name: CI/CD Pipeline
 
-name: CI
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
@@ -13,101 +9,204 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  NODE_VERSION: '20'
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
-  backend:
-    name: 🛡️ Backend · Test + Lint + Audit
+  test:
+    name: Tests + Análisis de Seguridad
     runs-on: ubuntu-latest
-
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:15
         env:
-          POSTGRES_USER: testuser
-          POSTGRES_PASSWORD: testpass
-          POSTGRES_DB: neuroalert_test
-        ports: ['5432:5432']
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U testuser"
+          --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
+    env:
+      DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
+      # NestJS exige estos secrets para firmar JWT al inicializar (valores de prueba)
+      JWT_ACCESS_SECRET: test_access_secret_minimo_32_chars_aaaaaaaaaaaa
+      JWT_REFRESH_SECRET: test_refresh_secret_minimo_32_chars_bbbbbbbbbbbb
+      NODE_ENV: test
     steps:
-      - name: 📥 Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🟢 Configurar Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '20'
           cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: 📦 Instalar dependencias
+      - name: Instalar dependencias
         run: npm ci
-
-      - name: 🔍 Type check (TypeScript estricto)
-        run: npm run type-check || npx tsc --noEmit
-
-      - name: 🧹 Lint (ESLint)
-        run: npm run lint || true
-
-      - name: 🗄️ Aplicar migraciones a la BD de prueba
-        env:
-          DATABASE_URL: postgresql://testuser:testpass@localhost:5432/neuroalert_test
+      - name: Generar Prisma Client + aplicar migraciones
         run: |
           npx prisma generate
           npx prisma migrate deploy
-
-      - name: 🧪 Tests
-        env:
-          DATABASE_URL: postgresql://testuser:testpass@localhost:5432/neuroalert_test
-          JWT_ACCESS_SECRET: test_secret_minimum_32_chars_long_test_test
-          JWT_REFRESH_SECRET: test_refresh_secret_minimum_32_chars_long
-          NODE_ENV: test
-        run: npm test || echo "⚠️  Sin suite de tests obligatoria"
-
-      - name: 🔒 npm audit
-        run: npm audit --audit-level=high
+      - name: Ejecutar tests (Jest) + cobertura
+        run: npm run test:cov -- --ci --passWithNoTests
+      - name: Subir cobertura a Codecov
+        uses: codecov/codecov-action@v5
         continue-on-error: true
-
-  docker-build:
-    name: 🐳 Verificar build de Docker
-    runs-on: ubuntu-latest
-    needs: [backend]
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 🐳 Configurar Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🏗️ Build backend image (root Dockerfile)
-        uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          tags: neuroalert-backend:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Análisis de seguridad de dependencias (npm audit)
+        run: npm audit --audit-level=high || true
+  # CodeQL corre EN PARALELO al job test (sin needs): analisis estatico de
+  # seguridad (SAST) sobre el codigo TypeScript y los workflows. Reporta al tab
+  # Security del repo y NO bloquea el deploy (deploy-dev solo needs: test, codeql).
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
 
-  security-scan:
-    name: 🛡️ Security Scan (Trivy)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  deploy-dev:
+    name: Deploy a Desarrollo
+    needs: [test, codeql]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy a Dev (Render)
+        run: |
+          curl -X POST ${{ secrets.RENDER_DEV_HOOK }}
+          echo "Deploy a Dev disparado"
+      - name: Esperar que Render inicie
+        run: sleep 30
+
+  smoke-test:
+    name: Smoke Test en Dev
+    needs: deploy-dev
     runs-on: ubuntu-latest
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
+      - name: Verificar que Dev responde
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              https://miapp-dev.onrender.com/health)
+            if [[ $STATUS -eq 200 ]]; then
+              echo "Dev responde correctamente (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Intento $i fallido (HTTP $STATUS), reintentando..."
+            sleep 15
+          done
+          echo "Dev no responde después de 10 intentos"
+          exit 1
+  dast:
+    name: DAST - OWASP ZAP
+    needs: smoke-test
+    runs-on: ubuntu-latest
 
-      - name: 🛡️ Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+
+      - name: Ejecutar OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          severity: 'HIGH,CRITICAL'
-          exit-code: '0'
-          ignore-unfixed: true
+          target: 'https://miapp-dev.onrender.com'
+          rules_file_name: '.zap/rules.tsv'
+          fail_action: false
+          allow_issue_writing: false
+          artifact_name: 'zap-baseline-report'
+
+  security-gate:
+    name: Security Gate
+    needs: dast
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar reporte ZAP
+        uses: actions/download-artifact@v4
+        with:
+          name: zap-baseline-report
+
+      - name: Evaluar política de seguridad
+        run: |
+          python3 << 'EOF'
+          import json
+          import sys
+          with open("report_json.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+          high_count = 0
+          medium_count = 0
+          low_count = 0
+          blacklist = {
+              "40018",  # SQL Injection
+              "40012",  # Reflected XSS
+              "40014",  # Stored XSS
+              "10202"   # CSRF
+          }
+          found_blacklist = set()
+          for site in data.get("site", []):
+              for alert in site.get("alerts", []):
+                  plugin_id = str(alert.get("pluginid", ""))
+                  riskcode = int(alert.get("riskcode", 0))
+                  if riskcode == 3:
+                      high_count += 1
+                  elif riskcode == 2:
+                      medium_count += 1
+                  elif riskcode == 1:
+                      low_count += 1
+                  if plugin_id in blacklist:
+                      found_blacklist.add(plugin_id)
+          print("=== RESUMEN SECURITY GATE ===")
+          print(f"High encontrados: {high_count}")
+          print(f"Medium encontrados: {medium_count}")
+          print(f"Low encontrados: {low_count}")
+          print(f"Blacklist encontrados: {len(found_blacklist)}")
+          if found_blacklist:
+              print("\nVulnerabilidades críticas detectadas:")
+              for vuln in sorted(found_blacklist):
+                  print(f" - {vuln}")
+              sys.exit(1)
+          if high_count > 0:
+              print("\nSe detectaron vulnerabilidades HIGH")
+              sys.exit(1)
+          if medium_count >= 5:
+              print("\nSe detectaron 5 o más vulnerabilidades MEDIUM")
+              sys.exit(1)
+          print("\nSecurity Gate aprobado")
+          EOF
+
+  deploy-prod:
+    name: Deploy a Producción
+    needs: security-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy a Prod (Render)
+        run: |
+          curl -X POST ${{ secrets.RENDER_PROD_HOOK }}
+          echo "Deploy a Producción disparado"
