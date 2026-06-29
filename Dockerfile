@@ -49,6 +49,9 @@ COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/prisma      ./prisma
 COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
 COPY --from=builder --chown=nestjs:nodejs /app/docker-entrypoint.sh ./
+# tsconfig.json: lo necesita ts-node para correr el seed (prisma db seed) en runtime.
+COPY --from=builder --chown=nestjs:nodejs /app/tsconfig.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/tsconfig.build.json ./
 
 USER nestjs
 
