@@ -1,25 +1,7 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-
-# Entornos virtuales
-.venv/
-venv/
-env/
-
-# Testing / coverage
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-coverage.xml
-
-# Variables de entorno
+node_modules/
+dist/
+*.log
 .env
 .env.*
-
-# Editor / SO
-.vscode/
-.idea/
-.DS_Store
+!.env.example
+coverage/

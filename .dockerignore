@@ -1,4 +1,9 @@
 node_modules
-__pycache__
+dist
 .git
+.github
+*.log
 .env
+.env.*
+Dockerfile.dev
+coverage

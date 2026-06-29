@@ -1,0 +1,26 @@
+# ============================================================================
+# NeuroAlert · Backend · Dockerfile DESARROLLO
+# ============================================================================
+FROM node:20-alpine
+
+# Instalar dependencias del sistema necesarias para Prisma
+RUN apk add --no-cache openssl libc6-compat
+
+WORKDIR /app
+
+# Copiar lockfiles primero (mejor cache de capas)
+COPY package*.json ./
+COPY prisma ./prisma/
+
+# Instalar dependencias
+RUN npm ci
+
+# Generar cliente de Prisma
+RUN npx prisma generate
+
+# Copiar código fuente (en dev se monta como volumen)
+COPY . .
+
+EXPOSE 4000
+
+CMD ["npm", "run", "start:dev"]
