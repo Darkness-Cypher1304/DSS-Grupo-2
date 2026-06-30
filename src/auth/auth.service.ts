@@ -73,22 +73,42 @@ export class AuthService {
   // REGISTRO
   // ==========================================================================
   async register(dto: RegisterDto, ip: string, userAgent: string): Promise<{ message: string }> {
+    // Mensaje ÚNICO de respuesta (idéntico exista o no la cuenta) — anti-enumeración
+    // (OWASP A07): el cliente NO puede distinguir un email nuevo de uno ya registrado.
+    const genericRegisterMessage = {
+      message:
+        'Te enviamos un correo de verificación. Revisa tu bandeja de entrada y la carpeta de spam.',
+    };
+
     // Verificar si el email ya existe (sin revelarlo en el error)
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email },
-      select: { id: true },
+      select: { id: true, email: true, fullName: true, status: true },
     });
 
     if (existing) {
-      // Importante: no decimos "el email ya existe" para evitar enumeración.
-      // En lugar de eso, devolvemos un mensaje genérico y enviamos un correo
-      // notificando al dueño real de que alguien intentó registrarse con su email.
-      // (Aquí, por simplicidad académica, devolvemos el genérico.)
-      this.logger.warn(`Intento de registro con email existente: ${dto.email}`);
-      // Mismo mensaje que un registro exitoso
-      return {
-        message: 'Si los datos son correctos, te enviamos un correo de verificación.',
-      };
+      // No revelamos que el email ya existe. PERO si la cuenta sigue SIN verificar,
+      // REENVIAMOS el correo de verificación: un correo perdido no debe dejar al
+      // usuario en un callejón sin salida (no podía verificar → no podía entrar →
+      // re-registrarse no hacía nada). NO se toca la contraseña ni ningún otro dato
+      // de la cuenta existente (evita que un tercero altere cuentas ajenas).
+      if (existing.status === UserStatus.PENDING_VERIFICATION) {
+        const verificationToken = randomBytes(32).toString('hex');
+        const verificationExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+        await this.prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            emailVerificationToken: verificationToken,
+            emailVerificationExpiresAt: verificationExpiresAt,
+          },
+        });
+        await this.redis.storeEmailVerificationToken(verificationToken, existing.id);
+        await this.mail.sendVerificationEmail(existing.email, existing.fullName, verificationToken);
+        this.logger.warn(`Re-registro de cuenta sin verificar — reenviando verificación: ${dto.email}`);
+      } else {
+        this.logger.warn(`Intento de registro con email ya registrado/activo: ${dto.email}`);
+      }
+      return genericRegisterMessage;
     }
 
     // ----------------------------------------------------------------------
@@ -139,9 +159,7 @@ export class AuthService {
       success: true,
     });
 
-    return {
-      message: 'Cuenta creada. Te hemos enviado un correo de verificación.',
-    };
+    return genericRegisterMessage;
   }
 
   // ==========================================================================
