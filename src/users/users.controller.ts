@@ -97,6 +97,17 @@ export class UsersController {
     return this.usersService.verifySpecialist(profileId, admin.sub, dto, ip);
   }
 
+  @Patch('admin/:userId/verify-email')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Verificar y activar el correo de un usuario (admin)' })
+  verifyUserEmail(
+    @Param('userId') userId: string,
+    @CurrentUser() admin: AuthUser,
+    @ClientIp() ip: string,
+  ) {
+    return this.usersService.verifyUserEmail(userId, admin.sub, ip);
+  }
+
   @Patch('admin/:userId/status')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Cambiar status (suspender/activar)' })
