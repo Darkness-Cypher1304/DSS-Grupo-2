@@ -40,7 +40,20 @@ async function bootstrap() {
   // --------------------------------------------------------------------------
   app.use(
     helmet({
-      contentSecurityPolicy: false, // CSP la maneja Nginx para mayor flexibilidad
+      // CSP: antes la ponía Nginx, pero al migrar a Render (sin Nginx) la API
+      // quedó SIN CSP. La API solo sirve JSON; el único HTML es Swagger UI, y
+      // SOLO en dev (NODE_ENV!=production). Por eso la política permite
+      // 'unsafe-inline' en script-src —necesario para el script inline de
+      // Swagger UI—; en una API JSON eso es inocuo (no hay HTML donde inyectar).
+      // Los assets de Swagger se sirven same-origin ('self', heredado de los
+      // defaults de helmet). frame-ancestors 'none' refuerza anti-clickjacking.
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          'script-src': ["'self'", "'unsafe-inline'"],
+          'frame-ancestors': ["'none'"],
+        },
+      },
       crossOriginEmbedderPolicy: false,
       hsts: {
         maxAge: 63072000, // 2 años
