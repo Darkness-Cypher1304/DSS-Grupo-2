@@ -1,57 +1,68 @@
 // ============================================================================
-// StorageService — MinIO (S3-compatible)
+// StorageService — almacenamiento de archivos en PostgreSQL (reemplaza MinIO)
 // ============================================================================
-// Maneja uploads de PDFs/imágenes con:
-//   - Presigned URLs (TTL 15 min) — el frontend sube directamente a MinIO
-//   - Validación de magic bytes (no confiar en mimetype del cliente)
-//   - SHA-256 hash para verificar integridad
+// MinIO no existe en Render free-tier y no se permiten servicios nuevos. Este
+// proveedor guarda el binario en la BD (tabla file_objects, bytea) PRESERVANDO
+// las capacidades de seguridad que ofrecía MinIO:
+//   - Whitelist de mime types + validación de MAGIC BYTES antes de persistir
+//     (no se confía en el mimeType del cliente)                         → RF-26
+//   - Hash SHA-256 de integridad                                        → RF-27
+//   - Tope de tamaño configurable (STORAGE_MAX_BYTES, def. 4MB)
+//   - Nombre de archivo sanitizado
+//   - Descarga tipo "presigned URL" mediante tokens HMAC efímeros       → RF-25/28
+//
+// Diseñado como abstracción: para migrar a S3/MinIO/Supabase mañana basta con
+// reimplementar estos métodos; los controllers no cambian.
 // ============================================================================
 
 import {
-  Global,
   Injectable,
   Logger,
-  Module,
-  OnModuleInit,
   BadRequestException,
-  ServiceUnavailableException,
+  NotFoundException,
+  PayloadTooLargeException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Client } from 'minio';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 
-interface UploadInfo {
-  key: string;
-  presignedUrl: string;
-  expiresInSeconds: number;
+import { PrismaService } from '../prisma/prisma.service';
+
+export type StorageFolder = 'specialist-docs' | 'resources' | 'avatars';
+export const STORAGE_FOLDERS: StorageFolder[] = ['specialist-docs', 'resources', 'avatars'];
+
+export interface StoredFileMeta {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
 }
 
-interface ValidatedFile {
+export interface FilePayload {
+  data: Buffer;
   mimeType: string;
-  hash: string;
-  size: number;
+  fileName: string;
+  sizeBytes: number;
+  ownerId: string | null;
+  folder: string;
 }
 
 @Injectable()
-export class StorageService implements OnModuleInit {
+export class StorageService {
   private readonly logger = new Logger(StorageService.name);
-  private client!: Client;
-  private bucketName!: string;
-  private presignedTtl!: number;
-  /** Si MinIO no está configurado, el storage queda deshabilitado (el backend
-   *  arranca igual; solo la subida de archivos no está disponible). */
-  private enabled = false;
+  private readonly maxBytes: number;
+  private readonly tokenSecret: string;
 
   // Lista BLANCA de mime types permitidos
-  private readonly ALLOWED_MIME_TYPES = new Set([
+  private readonly ALLOWED_MIME_TYPES = new Set<string>([
     'application/pdf',
     'image/jpeg',
     'image/png',
     'image/webp',
   ]);
 
-  // Magic bytes (header signatures) por tipo de archivo
-  private readonly MAGIC_BYTES: { [k: string]: number[][] } = {
+  // Firmas (magic bytes) por tipo
+  private readonly MAGIC_BYTES: Record<string, number[][]> = {
     'application/pdf': [[0x25, 0x50, 0x44, 0x46]], // %PDF
     'image/jpeg': [
       [0xff, 0xd8, 0xff, 0xe0],
@@ -61,162 +72,161 @@ export class StorageService implements OnModuleInit {
       [0xff, 0xd8, 0xff, 0xdb],
     ],
     'image/png': [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
-    'image/webp': [[0x52, 0x49, 0x46, 0x46]], // RIFF (luego WEBP en bytes 8-11)
+    'image/webp': [[0x52, 0x49, 0x46, 0x46]], // RIFF (+ "WEBP" en bytes 8..11)
   };
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {
+    this.maxBytes = parseInt(
+      this.config.get<string>('STORAGE_MAX_BYTES', String(4 * 1024 * 1024)),
+      10,
+    );
+    // Secreto para firmar tokens de descarga. Reusa el del JWT si no hay uno
+    // dedicado (en prod siempre hay JWT_ACCESS_SECRET).
+    this.tokenSecret =
+      this.config.get<string>('STORAGE_TOKEN_SECRET') ||
+      this.config.get<string>('JWT_ACCESS_SECRET') ||
+      'neuroalert-dev-storage-secret';
+  }
 
-  async onModuleInit(): Promise<void> {
-    const endPoint = this.config.get<string>('MINIO_ENDPOINT');
-    const accessKey = this.config.get<string>('MINIO_ROOT_USER');
-    const secretKey = this.config.get<string>('MINIO_ROOT_PASSWORD');
+  get maxFileBytes(): number {
+    return this.maxBytes;
+  }
 
-    // Sin credenciales/endpoint → storage deshabilitado (no se construye el
-    // cliente, evitando el crash de arranque). El backend funciona sin MinIO.
-    if (!endPoint || !accessKey || !secretKey) {
-      this.enabled = false;
-      this.logger.warn(
-        '⚠️  MinIO no configurado — almacenamiento de archivos DESHABILITADO. ' +
-          'El resto del backend funciona normalmente.',
+  isAllowedMime(mime: string): boolean {
+    return this.ALLOWED_MIME_TYPES.has(mime);
+  }
+
+  // --------------------------------------------------------------------------
+  // Guardar un archivo (valida whitelist + magic bytes + tamaño, hashea SHA-256)
+  // --------------------------------------------------------------------------
+  async storeFile(
+    buffer: Buffer,
+    originalName: string,
+    declaredMime: string,
+    folder: StorageFolder,
+    ownerId?: string,
+  ): Promise<StoredFileMeta> {
+    if (!buffer || buffer.length === 0) {
+      throw new BadRequestException('El archivo está vacío.');
+    }
+    if (buffer.length > this.maxBytes) {
+      throw new PayloadTooLargeException(
+        `El archivo supera el máximo permitido (${Math.round(this.maxBytes / 1024 / 1024)} MB).`,
       );
-      return;
     }
-
-    this.client = new Client({
-      endPoint,
-      port: parseInt(this.config.get<string>('MINIO_PORT', '9000'), 10),
-      useSSL: this.config.get<string>('MINIO_USE_SSL', 'false') === 'true',
-      accessKey,
-      secretKey,
-    });
-
-    this.bucketName = this.config.get<string>('MINIO_BUCKET_NAME', 'neuroalert-resources');
-    this.presignedTtl = parseInt(this.config.get<string>('MINIO_PRESIGNED_URL_TTL', '900'), 10);
-    this.enabled = true;
-
-    try {
-      const exists = await this.client.bucketExists(this.bucketName);
-      if (!exists) {
-        await this.client.makeBucket(this.bucketName);
-        this.logger.log(`✅ Bucket "${this.bucketName}" creado`);
-      } else {
-        this.logger.log(`✅ Bucket "${this.bucketName}" disponible`);
-      }
-    } catch (err) {
-      this.logger.error(`Error inicializando bucket: ${(err as Error).message}`);
+    if (!this.ALLOWED_MIME_TYPES.has(declaredMime)) {
+      throw new BadRequestException(`Tipo de archivo no permitido: ${declaredMime}`);
     }
-  }
-
-  // --------------------------------------------------------------------------
-  // Generar URL pre-firmada para upload (PUT directo desde el cliente)
-  // --------------------------------------------------------------------------
-  async getPresignedUploadUrl(
-    originalFileName: string,
-    folder: 'resources' | 'specialist-docs' | 'avatars',
-  ): Promise<UploadInfo> {
-    this.assertEnabled();
-    const sanitized = this.sanitizeFileName(originalFileName);
-    const key = `${folder}/${randomUUID()}-${sanitized}`;
-    const presignedUrl = await this.client.presignedPutObject(
-      this.bucketName,
-      key,
-      this.presignedTtl,
-    );
-    return { key, presignedUrl, expiresInSeconds: this.presignedTtl };
-  }
-
-  // --------------------------------------------------------------------------
-  // Generar URL pre-firmada para download
-  // --------------------------------------------------------------------------
-  async getPresignedDownloadUrl(key: string): Promise<string> {
-    this.assertEnabled();
-    return this.client.presignedGetObject(this.bucketName, key, this.presignedTtl);
-  }
-
-  // --------------------------------------------------------------------------
-  // Eliminar archivo
-  // --------------------------------------------------------------------------
-  async deleteObject(key: string): Promise<void> {
-    this.assertEnabled();
-    await this.client.removeObject(this.bucketName, key);
-  }
-
-  // --------------------------------------------------------------------------
-  // Validar magic bytes de un archivo subido (verificación post-upload)
-  // --------------------------------------------------------------------------
-  async validateUploadedFile(key: string, declaredMimeType: string): Promise<ValidatedFile> {
-    this.assertEnabled();
-    if (!this.ALLOWED_MIME_TYPES.has(declaredMimeType)) {
-      throw new BadRequestException(`Tipo de archivo no permitido: ${declaredMimeType}`);
-    }
-
-    // Descargar primeros bytes para verificar magic
-    const stream = await this.client.getPartialObject(this.bucketName, key, 0, 16);
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const header = Buffer.concat(chunks).slice(0, 16);
-
-    const expectedSignatures = this.MAGIC_BYTES[declaredMimeType];
-    if (!expectedSignatures || expectedSignatures.length === 0) {
-      throw new BadRequestException('No se puede validar este tipo de archivo');
-    }
-
-    const matches = expectedSignatures.some((sig) =>
-      sig.every((byte, i) => header[i] === byte),
-    );
-    if (!matches) {
-      // Magic bytes no coinciden — archivo sospechoso, eliminarlo
-      await this.deleteObject(key);
+    // RF-26: el servidor NO confía en el mimeType del cliente — valida los bytes.
+    if (!this.matchesMagicBytes(buffer, declaredMime)) {
       throw new BadRequestException(
         'El contenido del archivo no coincide con el tipo declarado. Archivo rechazado.',
       );
     }
-
-    // Calcular hash SHA-256 completo
-    const fullStream = await this.client.getObject(this.bucketName, key);
-    const hash = createHash('sha256');
-    let size = 0;
-    for await (const chunk of fullStream) {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      hash.update(buf);
-      size += buf.length;
+    // WebP: además del RIFF inicial, exige "WEBP" en los bytes 8..11.
+    if (declaredMime === 'image/webp' && buffer.slice(8, 12).toString('ascii') !== 'WEBP') {
+      throw new BadRequestException('El archivo WebP no es válido.');
     }
 
+    const sha256 = createHash('sha256').update(buffer).digest('hex'); // RF-27
+    const fileName = this.sanitizeFileName(originalName);
+
+    const file = await this.prisma.fileObject.create({
+      data: {
+        folder,
+        fileName,
+        mimeType: declaredMime,
+        sizeBytes: buffer.length,
+        sha256,
+        data: buffer,
+        ownerId: ownerId ?? null,
+      },
+      select: { id: true, fileName: true, mimeType: true, sizeBytes: true, sha256: true },
+    });
+
+    this.logger.log(`Archivo almacenado ${file.id} (${file.sizeBytes} B, ${declaredMime})`);
+    return file;
+  }
+
+  // --------------------------------------------------------------------------
+  // Leer el binario completo (para descarga)
+  // --------------------------------------------------------------------------
+  async getFile(id: string): Promise<FilePayload> {
+    const file = await this.prisma.fileObject.findUnique({ where: { id } });
+    if (!file) throw new NotFoundException('Archivo no encontrado');
     return {
-      mimeType: declaredMimeType,
-      hash: hash.digest('hex'),
-      size,
+      data: Buffer.from(file.data),
+      mimeType: file.mimeType,
+      fileName: file.fileName,
+      sizeBytes: file.sizeBytes,
+      ownerId: file.ownerId,
+      folder: file.folder,
     };
   }
 
-  // --------------------------------------------------------------------------
-  // Guard: lanza si el storage está deshabilitado (MinIO no configurado)
-  // --------------------------------------------------------------------------
-  private assertEnabled(): void {
-    if (!this.enabled) {
-      throw new ServiceUnavailableException(
-        'El almacenamiento de archivos no está disponible en este entorno.',
-      );
-    }
+  // Metadatos sin el binario (para chequear autorización antes de servir)
+  async getMeta(id: string) {
+    return this.prisma.fileObject.findUnique({
+      where: { id },
+      select: { id: true, fileName: true, mimeType: true, sizeBytes: true, ownerId: true, folder: true },
+    });
+  }
+
+  async deleteFile(id: string): Promise<void> {
+    await this.prisma.fileObject.delete({ where: { id } }).catch(() => undefined);
   }
 
   // --------------------------------------------------------------------------
-  // Sanitizar nombre de archivo (quitar caracteres peligrosos)
+  // "Presigned URL" emulada: token HMAC con expiración (RF-25 / RF-28)
   // --------------------------------------------------------------------------
+  createDownloadToken(id: string, ttlSeconds = 900): string {
+    const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const payload = `${id}.${exp}`;
+    return Buffer.from(`${payload}.${this.sign(payload)}`).toString('base64url');
+  }
+
+  verifyDownloadToken(token: string): string {
+    let decoded: string;
+    try {
+      decoded = Buffer.from(token, 'base64url').toString('utf8');
+    } catch {
+      throw new BadRequestException('Token de descarga inválido');
+    }
+    const parts = decoded.split('.');
+    if (parts.length !== 3) throw new BadRequestException('Token de descarga inválido');
+    const [id, expStr, sig] = parts;
+    if (this.sign(`${id}.${expStr}`) !== sig) {
+      throw new BadRequestException('Token de descarga inválido');
+    }
+    if (parseInt(expStr, 10) < Math.floor(Date.now() / 1000)) {
+      throw new BadRequestException('El enlace de descarga expiró');
+    }
+    return id;
+  }
+
+  // --------------------------------------------------------------------------
+  // Helpers privados
+  // --------------------------------------------------------------------------
+  private sign(payload: string): string {
+    return createHmac('sha256', this.tokenSecret).update(payload).digest('hex');
+  }
+
+  private matchesMagicBytes(buffer: Buffer, mime: string): boolean {
+    const signatures = this.MAGIC_BYTES[mime];
+    if (!signatures || signatures.length === 0) return false;
+    return signatures.some((sig) => sig.every((byte, i) => buffer[i] === byte));
+  }
+
   private sanitizeFileName(name: string): string {
-    return name
+    const DIACRITICS = /[̀-ͯ]/g; // marcas combinantes tras NFD
+    const cleaned = (name || 'archivo')
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
+      .replace(DIACRITICS, '')
       .replace(/[^a-zA-Z0-9._-]/g, '_')
       .substring(0, 100);
+    return cleaned.length > 0 ? cleaned : 'archivo';
   }
 }
-
-@Global()
-@Module({
-  providers: [StorageService],
-  exports: [StorageService],
-})
-export class StorageModule {}

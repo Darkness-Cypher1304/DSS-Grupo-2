@@ -427,3 +427,30 @@ model AuditLog {
   @@index([entityType, entityId])
   @@map("audit_logs")
 }
+
+// ============================================================================
+// MODELO: FILE_OBJECT  (almacenamiento de archivos en PostgreSQL — RF-25..28)
+// ============================================================================
+// Reemplaza MinIO (no disponible en Render free-tier) SIN añadir servicios.
+// Guarda el binario (bytea) + metadatos verificados por el servidor:
+//   - mimeType contra whitelist + magic-bytes validados ANTES de persistir (RF-26)
+//   - sha256 de integridad (RF-27)
+//   - sizeBytes (tope configurable)
+// La descarga emula "presigned URLs" con tokens HMAC efímeros (RF-25/28).
+// `ownerId` es escalar a propósito (sin relación) para no tocar el modelo User.
+model FileObject {
+  id          String   @id @default(cuid())
+  folder      String   // 'specialist-docs' | 'resources' | 'avatars'
+  fileName    String   // nombre original sanitizado
+  mimeType    String
+  sizeBytes   Int
+  sha256      String
+  data        Bytes    // contenido binario (bytea)
+  ownerId     String?  // usuario que subió el archivo
+
+  createdAt   DateTime @default(now())
+
+  @@index([ownerId])
+  @@index([folder])
+  @@map("file_objects")
+}
