@@ -132,6 +132,17 @@ export class VerifyEmailDto {
 }
 
 // ---------------------------------------------------------------------------
+// REENVÍO DE VERIFICACIÓN DE EMAIL
+// ---------------------------------------------------------------------------
+export class ResendVerificationDto {
+  @ApiProperty()
+  @IsEmail()
+  @MaxLength(255)
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase().trim() : value))
+  email!: string;
+}
+
+// ---------------------------------------------------------------------------
 // RESPONSE DTOs (lo que SE DEVUELVE al cliente)
 // Importante: jamás incluyen passwordHash, tokens internos, etc.
 // ---------------------------------------------------------------------------
