@@ -206,6 +206,48 @@ La orientación es educativa y no sustituye un diagnóstico profesional.
   }
 
   // --------------------------------------------------------------------------
+  // NOTIFICACIÓN: CONSULTA TOMADA POR UN ESPECIALISTA
+  // --------------------------------------------------------------------------
+  async sendQuestionAssignedEmail(
+    to: string,
+    fullName: string,
+    questionTitle: string,
+  ): Promise<void> {
+    const consultUrl = `${this.frontendUrl}/ask`;
+    const subject = '👩‍⚕️ Un especialista tomó tu consulta — NeuroAlert';
+
+    const html = this.layout(`
+      <h1 style="margin:0 0 16px;color:#0f4c47;font-size:24px">Tu consulta está en revisión</h1>
+      <p>Hola <strong>${this.escapeHtml(fullName)}</strong>,</p>
+      <p>Un especialista verificado tomó tu consulta y la está revisando:</p>
+      <p style="background:#f0f7f6;border-left:3px solid #0f4c47;padding:12px 16px;border-radius:6px;color:#0f4c47;font-style:italic">
+        "${this.escapeHtml(questionTitle)}"
+      </p>
+      <p>Te avisaremos en cuanto haya una respuesta.</p>
+      <p style="text-align:center;margin:32px 0">
+        <a href="${consultUrl}" style="background:#0f4c47;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">
+          Ver mi consulta
+        </a>
+      </p>
+      <p style="color:#999;font-size:13px;margin-top:24px">
+        Recuerda: la orientación de los especialistas es educativa y no sustituye un
+        diagnóstico profesional.
+      </p>
+    `);
+
+    const text = `
+Hola ${fullName},
+
+Un especialista tomó tu consulta y la está revisando: "${questionTitle}"
+Síguela en: ${consultUrl}
+
+Te avisaremos cuando haya una respuesta.
+    `.trim();
+
+    await this.send(to, subject, html, text);
+  }
+
+  // --------------------------------------------------------------------------
   // INFRAESTRUCTURA INTERNA
   // --------------------------------------------------------------------------
   private async send(to: string, subject: string, html: string, text: string): Promise<void> {
