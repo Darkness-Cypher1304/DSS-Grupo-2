@@ -35,6 +35,7 @@ import {
   ChangePasswordDto,
   ResetPasswordDto,
 } from './dto/auth.dto';
+import { isCommonPassword } from './password-blocklist';
 
 interface TokenPayload {
   sub: string;
@@ -73,6 +74,15 @@ export class AuthService {
   // REGISTRO
   // ==========================================================================
   async register(dto: RegisterDto, ip: string, userAgent: string): Promise<{ message: string }> {
+    // Rechazar contraseñas comunes/débiles ANTES de cualquier lógica de
+    // existencia (se aplica igual a email nuevo o existente → no filtra si la
+    // cuenta existe). NIST SP 800-63B: bloquear contraseñas conocidas.
+    if (isCommonPassword(dto.password)) {
+      throw new BadRequestException(
+        'Esa contraseña es demasiado común o débil. Elige una más difícil de adivinar.',
+      );
+    }
+
     // Mensaje ÚNICO de respuesta (idéntico exista o no la cuenta) — anti-enumeración
     // (OWASP A07): el cliente NO puede distinguir un email nuevo de uno ya registrado.
     const genericRegisterMessage = {
@@ -433,17 +443,63 @@ export class AuthService {
   }
 
   // ==========================================================================
+  // REENVIAR VERIFICACIÓN DE EMAIL
+  // ==========================================================================
+  /**
+   * Reenvía el correo de verificación a una cuenta que sigue PENDING_VERIFICATION.
+   * Mensaje genérico e idéntico en todos los casos (anti-enumeración): no revela
+   * si el correo existe ni su estado. Solo regenera el token y reenvía si la
+   * cuenta existe y está sin verificar; NO toca la contraseña ni otros datos.
+   */
+  async resendVerification(email: string): Promise<{ message: string }> {
+    const genericMessage = {
+      message:
+        'Si el correo corresponde a una cuenta sin verificar, te reenviaremos el enlace de verificación.',
+    };
+
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true, fullName: true, status: true },
+    });
+
+    if (!user || user.status !== UserStatus.PENDING_VERIFICATION) {
+      return genericMessage;
+    }
+
+    const verificationToken = randomBytes(32).toString('hex');
+    const verificationExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerificationToken: verificationToken,
+        emailVerificationExpiresAt: verificationExpiresAt,
+      },
+    });
+    await this.redis.storeEmailVerificationToken(verificationToken, user.id);
+    this.dispatchMail(
+      this.mail.sendVerificationEmail(user.email, user.fullName, verificationToken),
+      'verify-resend',
+    );
+
+    return genericMessage;
+  }
+
+  // ==========================================================================
   // SOLICITAR RESET DE CONTRASEÑA
   // ==========================================================================
   async requestPasswordReset(email: string): Promise<{ message: string }> {
     const user = await this.prisma.user.findUnique({ where: { email } });
 
-    // Mensaje genérico independientemente de si el email existe
+    // Mensaje genérico e IDÉNTICO en todos los casos (anti-enumeración OWASP
+    // A07): no revela si el correo existe ni su estado. El correo de reseteo
+    // SOLO se envía a cuentas registradas Y verificadas (status ACTIVE); una
+    // cuenta sin verificar debe verificar primero (ver resendVerification).
     const genericMessage = {
-      message: 'Si la cuenta existe, te enviamos un correo con instrucciones.',
+      message:
+        'Si el correo corresponde a una cuenta registrada y verificada, te enviaremos un enlace para restablecer tu contraseña.',
     };
 
-    if (!user) return genericMessage;
+    if (!user || user.status !== UserStatus.ACTIVE) return genericMessage;
 
     const resetToken = randomBytes(32).toString('hex');
     const resetExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
@@ -481,6 +537,19 @@ export class AuthService {
       user.passwordResetExpiresAt < new Date()
     ) {
       throw new BadRequestException('Token inválido o expirado');
+    }
+
+    // Rechazar contraseñas comunes/débiles.
+    if (isCommonPassword(dto.newPassword)) {
+      throw new BadRequestException(
+        'Esa contraseña es demasiado común o débil. Elige una más difícil de adivinar.',
+      );
+    }
+
+    // La nueva contraseña NO puede ser igual a la actual.
+    const sameAsCurrent = await bcrypt.compare(dto.newPassword, user.passwordHash);
+    if (sameAsCurrent) {
+      throw new BadRequestException('La nueva contraseña debe ser diferente a la actual.');
     }
 
     const passwordHash = await bcrypt.hash(dto.newPassword, this.bcryptRounds);
@@ -529,6 +598,12 @@ export class AuthService {
 
     if (dto.currentPassword === dto.newPassword) {
       throw new BadRequestException('La nueva contraseña debe ser diferente a la actual');
+    }
+
+    if (isCommonPassword(dto.newPassword)) {
+      throw new BadRequestException(
+        'Esa contraseña es demasiado común o débil. Elige una más difícil de adivinar.',
+      );
     }
 
     const passwordHash = await bcrypt.hash(dto.newPassword, this.bcryptRounds);

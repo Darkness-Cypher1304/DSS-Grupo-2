@@ -32,6 +32,7 @@ import {
   RequestPasswordResetDto,
   ResetPasswordDto,
   VerifyEmailDto,
+  ResendVerificationDto,
 } from './dto/auth.dto';
 import { Public, CurrentUser, ClientIp, AuthUser } from '../common/decorators';
 
@@ -145,6 +146,18 @@ export class AuthController {
   @ApiOperation({ summary: 'Verificar email con token recibido' })
   async verifyEmail(@Body() dto: VerifyEmailDto): Promise<{ message: string }> {
     return this.authService.verifyEmail(dto.token);
+  }
+
+  // --------------------------------------------------------------------------
+  // POST /auth/resend-verification — reenviar correo de verificación
+  // --------------------------------------------------------------------------
+  @Public()
+  @Throttle({ default: { ttl: 60000, limit: 3 } }) // 3 solicitudes/min por IP
+  @HttpCode(HttpStatus.OK)
+  @Post('resend-verification')
+  @ApiOperation({ summary: 'Reenviar correo de verificación a una cuenta sin verificar' })
+  async resendVerification(@Body() dto: ResendVerificationDto): Promise<{ message: string }> {
+    return this.authService.resendVerification(dto.email);
   }
 
   // --------------------------------------------------------------------------
