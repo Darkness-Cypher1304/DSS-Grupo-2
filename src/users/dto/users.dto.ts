@@ -68,6 +68,20 @@ export class RequestSpecialistUpgradeDto {
   @IsString()
   @MaxLength(2000)
   bio?: string;
+
+  // RF-10: IDs de FileObject (subidos antes vía POST /storage/upload con
+  // folder='specialist-docs'). El backend valida tipo y tamaño en la subida.
+  @ApiProperty({ required: false, description: 'ID del documento de licencia (FileObject)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  licenseDocumentId?: string;
+
+  @ApiProperty({ required: false, description: 'ID del CV (FileObject)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  cvDocumentId?: string;
 }
 
 // ----------------------------------------------------------------------------

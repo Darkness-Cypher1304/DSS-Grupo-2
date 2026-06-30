@@ -83,6 +83,10 @@ export class UsersService {
         institution: dto.institution,
         yearsOfExperience: dto.yearsOfExperience,
         bio: dto.bio,
+        // RF-10: documentos de validación (IDs de FileObject). Solo se sobreescriben
+        // si llegan en la solicitud (undefined = Prisma no toca el campo).
+        licenseDocumentKey: dto.licenseDocumentId ?? undefined,
+        cvDocumentKey: dto.cvDocumentId ?? undefined,
         verificationStatus: SpecialistVerificationStatus.PENDING,
         rejectionReason: null,
       },
@@ -93,6 +97,8 @@ export class UsersService {
         institution: dto.institution,
         yearsOfExperience: dto.yearsOfExperience,
         bio: dto.bio,
+        licenseDocumentKey: dto.licenseDocumentId ?? undefined,
+        cvDocumentKey: dto.cvDocumentId ?? undefined,
         verificationStatus: SpecialistVerificationStatus.PENDING,
       },
     });
