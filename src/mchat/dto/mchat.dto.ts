@@ -2,9 +2,11 @@
 // DTOs de M-CHAT-R
 // ============================================================================
 
-import { IsEnum, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
+
+import { IsMchatResponses } from './mchat-responses.validator';
 
 // ----------------------------------------------------------------------------
 // Submit del cuestionario
@@ -35,6 +37,6 @@ export class SubmitMchatDto {
     description: 'Mapa de respuestas { q1: "YES" | "NO", ..., q20: ... }',
     example: { q1: 'YES', q2: 'NO', q3: 'YES' /* ... */ },
   })
-  @IsObject()
+  @IsMchatResponses()
   responses!: Record<string, 'YES' | 'NO'>;
 }
