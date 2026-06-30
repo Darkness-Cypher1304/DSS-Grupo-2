@@ -7,18 +7,22 @@
 //   - El admin ve todo.
 // ============================================================================
 
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { QuestionStatus, UserRole } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { MailService } from '../mail/mail.service';
 import { CreateAnswerDto, CreateQuestionDto } from './dto/questions.dto';
 
 @Injectable()
 export class QuestionsService {
+  private readonly logger = new Logger(QuestionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly mail: MailService,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -179,6 +183,23 @@ export class QuestionsService {
       ipAddress: ip,
       success: true,
     });
+
+    // RF-31: notificar por correo al autor (padre) que su consulta fue respondida.
+    // Best-effort y a nivel sistema (no en el contexto del especialista, que no
+    // debe ver el email del padre). No bloquea ni rompe el flujo de respuesta.
+    try {
+      const q = await this.prisma.question.findUnique({
+        where: { id: questionId },
+        select: { title: true, author: { select: { email: true, fullName: true } } },
+      });
+      if (q?.author?.email) {
+        await this.mail.sendAnswerNotificationEmail(q.author.email, q.author.fullName, q.title);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo enviar la notificación de respuesta: ${(err as Error).message}`,
+      );
+    }
 
     return result;
   }
