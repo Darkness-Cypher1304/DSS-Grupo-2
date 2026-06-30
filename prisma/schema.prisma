@@ -454,3 +454,34 @@ model FileObject {
   @@index([folder])
   @@map("file_objects")
 }
+
+// ============================================================================
+// MODELO: NOTIFICATION  (notificaciones in-app por polling — RF-34)
+// ============================================================================
+// Sin WebSocket (Render free-tier no lo sostiene): el frontend hace polling
+// del contador/listado. La notificación se crea a NIVEL SISTEMA cuando ocurre
+// el evento (p.ej. un especialista responde una consulta → se notifica al padre).
+//   - userId: destinatario. Escalar a propósito (sin relación) — mismo criterio
+//     que FileObject — para no tocar el modelo User.
+//   - type: discriminador de evento ('ANSWER', etc.).
+//   - relatedType/relatedId: enlace opaco al recurso origen (p.ej. Question/<id>),
+//     sin foreign key para no forzar cascadas ni acoplar el modelo.
+// RLS: ENABLE + NO FORCE (igual que el resto). El control real vive en la capa
+// app (el service filtra SIEMPRE por userId); las políticas son defensa en
+// profundidad para conexiones de roles NO-dueños.
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String   // destinatario
+  type        String   // 'ANSWER' | ... (discriminador del evento)
+  title       String
+  body        String?  @db.Text
+  relatedType String?  // 'Question' | ... (tipo del recurso de origen)
+  relatedId   String?  // id del recurso de origen (enlace opaco, sin FK)
+  isRead      Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}

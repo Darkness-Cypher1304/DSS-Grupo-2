@@ -13,6 +13,7 @@ import { QuestionStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateAnswerDto, CreateQuestionDto } from './dto/questions.dto';
 
 @Injectable()
@@ -23,6 +24,7 @@ export class QuestionsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly mail: MailService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -184,16 +186,28 @@ export class QuestionsService {
       success: true,
     });
 
-    // RF-31: notificar por correo al autor (padre) que su consulta fue respondida.
-    // Best-effort y a nivel sistema (no en el contexto del especialista, que no
-    // debe ver el email del padre). No bloquea ni rompe el flujo de respuesta.
+    // RF-31 + RF-34: notificar al autor (padre) que su consulta fue respondida,
+    // por DOS canales — correo (RF-31) e in-app (RF-34) — ambos best-effort y a
+    // nivel sistema (no en el contexto del especialista, que no debe ver el email
+    // del padre). Ninguno bloquea ni rompe el flujo de respuesta.
     try {
       const q = await this.prisma.question.findUnique({
         where: { id: questionId },
-        select: { title: true, author: { select: { email: true, fullName: true } } },
+        select: { title: true, author: { select: { id: true, email: true, fullName: true } } },
       });
       if (q?.author?.email) {
         await this.mail.sendAnswerNotificationEmail(q.author.email, q.author.fullName, q.title);
+      }
+      // RF-34: notificación in-app (la lee el padre por polling de la campana).
+      if (q?.author?.id) {
+        await this.notifications.createForUser({
+          userId: q.author.id,
+          type: 'ANSWER',
+          title: 'Un especialista respondió tu consulta',
+          body: q.title,
+          relatedType: 'Question',
+          relatedId: questionId,
+        });
       }
     } catch (err) {
       this.logger.warn(
