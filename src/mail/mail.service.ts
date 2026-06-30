@@ -10,31 +10,61 @@
 import { Global, Module, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import * as nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
+
+type MailProvider = 'smtp' | 'resend' | 'console';
 
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
   private readonly resend: Resend | null;
+  private readonly smtp: Transporter | null;
+  private readonly provider: MailProvider;
   private readonly fromEmail: string;
   private readonly fromName: string;
   private readonly frontendUrl: string;
-  private readonly enabled: boolean;
 
   constructor(private readonly config: ConfigService) {
-    const apiKey = this.config.get<string>('RESEND_API_KEY');
-    this.fromEmail = this.config.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
     this.fromName = this.config.get<string>('RESEND_FROM_NAME', 'NeuroAlert');
     this.frontendUrl = this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
 
-    if (apiKey && apiKey.trim().length > 0) {
-      this.resend = new Resend(apiKey);
-      this.enabled = true;
+    const smtpHost = this.config.get<string>('SMTP_HOST');
+    const smtpUser = this.config.get<string>('SMTP_USER');
+    const smtpPass = this.config.get<string>('SMTP_PASS');
+    const resendKey = this.config.get<string>('RESEND_API_KEY');
+
+    // Cadena de proveedores (el primero configurado gana):
+    //   1) SMTP (p.ej. Gmail App Password) → llega a CUALQUIER bandeja, gratis,
+    //      sin dominio propio ni servicio nuevo en Render.
+    //   2) Resend → requiere API key (y dominio verificado para destinatarios
+    //      arbitrarios; sin dominio solo envía al correo de la cuenta).
+    //   3) Consola → fallback de desarrollo (imprime el enlace en los logs).
+    if (smtpHost && smtpUser && smtpPass) {
+      this.smtp = nodemailer.createTransport({
+        host: smtpHost,
+        port: parseInt(this.config.get<string>('SMTP_PORT', '465'), 10),
+        secure: this.config.get<string>('SMTP_SECURE', 'true') === 'true',
+        auth: { user: smtpUser, pass: smtpPass },
+      });
+      this.resend = null;
+      this.provider = 'smtp';
+      // En Gmail el "from" debe coincidir con la cuenta autenticada.
+      this.fromEmail = this.config.get<string>('SMTP_FROM') || smtpUser;
+      this.logger.log('✅ SMTP configurado — correos se enviarán por email');
+    } else if (resendKey && resendKey.trim().length > 0) {
+      this.resend = new Resend(resendKey);
+      this.smtp = null;
+      this.provider = 'resend';
+      this.fromEmail = this.config.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
       this.logger.log('✅ Resend configurado — correos se enviarán por email');
     } else {
       this.resend = null;
-      this.enabled = false;
+      this.smtp = null;
+      this.provider = 'console';
+      this.fromEmail = this.config.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
       this.logger.warn(
-        '⚠️  RESEND_API_KEY no configurada — correos se imprimirán en consola',
+        '⚠️  Sin proveedor de correo (SMTP_* / RESEND_API_KEY) — los correos se imprimirán en consola',
       );
     }
   }
@@ -161,8 +191,10 @@ La orientación es educativa y no sustituye un diagnóstico profesional.
   // INFRAESTRUCTURA INTERNA
   // --------------------------------------------------------------------------
   private async send(to: string, subject: string, html: string, text: string): Promise<void> {
-    if (!this.enabled || !this.resend) {
-      // Modo desarrollo sin Resend → imprime en consola
+    const from = `${this.fromName} <${this.fromEmail}>`;
+
+    // Fallback de desarrollo: imprime el enlace en los logs (no envía).
+    if (this.provider === 'console') {
       this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       this.logger.log(`📧 [SIMULADO] Correo a: ${to}`);
       this.logger.log(`📧 Asunto: ${subject}`);
@@ -173,24 +205,23 @@ La orientación es educativa y no sustituye un diagnóstico profesional.
     }
 
     try {
-      const { data, error } = await this.resend.emails.send({
-        from: `${this.fromName} <${this.fromEmail}>`,
-        to: [to],
-        subject,
-        html,
-        text,
-      });
-
-      if (error) {
-        this.logger.error(`Error enviando correo a ${to}: ${error.message}`);
-        // No re-throw — fallar silenciosamente para no bloquear el flujo principal
+      if (this.provider === 'smtp' && this.smtp) {
+        const info = await this.smtp.sendMail({ from, to, subject, html, text });
+        this.logger.log(`✉️  Correo enviado a ${to} vía SMTP (id: ${info.messageId})`);
         return;
       }
 
-      this.logger.log(`✉️  Correo enviado a ${to} (id: ${data?.id})`);
+      if (this.provider === 'resend' && this.resend) {
+        const { data, error } = await this.resend.emails.send({ from, to: [to], subject, html, text });
+        if (error) {
+          this.logger.error(`Error enviando correo a ${to}: ${error.message}`);
+          return; // No re-throw: no bloquear el flujo principal
+        }
+        this.logger.log(`✉️  Correo enviado a ${to} vía Resend (id: ${data?.id})`);
+      }
     } catch (err) {
-      const error = err as Error;
-      this.logger.error(`Excepción enviando correo: ${error.message}`);
+      // Nunca propagamos: un fallo de correo no debe tumbar registro/login.
+      this.logger.error(`Excepción enviando correo a ${to}: ${(err as Error).message}`);
     }
   }
 

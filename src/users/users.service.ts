@@ -197,6 +197,38 @@ export class UsersService {
   }
 
   // --------------------------------------------------------------------------
+  // ADMIN: verificar el correo de un usuario manualmente (desbloquea el login
+  // sin depender del envío de correo). Deja emailVerified=true y status=ACTIVE
+  // de forma consistente (a diferencia de updateUserStatus, que solo toca status).
+  // --------------------------------------------------------------------------
+  async verifyUserEmail(targetUserId: string, adminId: string, ip: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    await this.prisma.user.update({
+      where: { id: targetUserId },
+      data: {
+        emailVerified: true,
+        status: UserStatus.ACTIVE,
+        emailVerificationToken: null,
+        emailVerificationExpiresAt: null,
+      },
+    });
+
+    await this.audit.log({
+      userId: adminId,
+      action: 'USER_EMAIL_VERIFIED',
+      entityType: 'User',
+      entityId: targetUserId,
+      ipAddress: ip,
+      success: true,
+      metadata: { by: 'ADMIN' },
+    });
+
+    return { message: 'Usuario verificado y activado' };
+  }
+
+  // --------------------------------------------------------------------------
   // ADMIN: cambiar status (suspender/activar)
   // --------------------------------------------------------------------------
   async updateUserStatus(targetUserId: string, dto: UpdateUserStatusDto, adminId: string, ip: string) {
