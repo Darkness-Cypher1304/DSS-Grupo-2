@@ -13,13 +13,14 @@ import { Resend } from 'resend';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 
-type MailProvider = 'smtp' | 'resend' | 'console';
+type MailProvider = 'brevo' | 'smtp' | 'resend' | 'console';
 
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
   private readonly resend: Resend | null;
   private readonly smtp: Transporter | null;
+  private readonly brevoApiKey: string | null;
   private readonly provider: MailProvider;
   private readonly fromEmail: string;
   private readonly fromName: string;
@@ -29,18 +30,32 @@ export class MailService {
     this.fromName = this.config.get<string>('RESEND_FROM_NAME', 'NeuroAlert');
     this.frontendUrl = this.config.get<string>('FRONTEND_URL', 'http://localhost:3000');
 
+    const brevoKey = this.config.get<string>('BREVO_API_KEY');
     const smtpHost = this.config.get<string>('SMTP_HOST');
     const smtpUser = this.config.get<string>('SMTP_USER');
     const smtpPass = this.config.get<string>('SMTP_PASS');
     const resendKey = this.config.get<string>('RESEND_API_KEY');
 
-    // Cadena de proveedores (el primero configurado gana):
-    //   1) SMTP (p.ej. Gmail App Password) → llega a CUALQUIER bandeja, gratis,
-    //      sin dominio propio ni servicio nuevo en Render.
-    //   2) Resend → requiere API key (y dominio verificado para destinatarios
-    //      arbitrarios; sin dominio solo envía al correo de la cuenta).
-    //   3) Consola → fallback de desarrollo (imprime el enlace en los logs).
-    if (smtpHost && smtpUser && smtpPass) {
+    // Cadena de proveedores (el primero configurado gana). PRIORIDAD a los que
+    // envían por API HTTP (puerto 443): Render BLOQUEA los puertos SMTP (25/465/587)
+    // en el plan gratuito desde sep-2025 → SMTP NO funciona en Render (sí en local).
+    //   1) Brevo (API HTTP) → gratis 300/día, SIN dominio, a cualquier destinatario.
+    //   2) Resend (API HTTP) → requiere dominio verificado para destinatarios arbitrarios.
+    //   3) SMTP (p.ej. Gmail) → solo útil en LOCAL (en Render free queda bloqueado).
+    //   4) Consola → fallback de desarrollo (imprime el enlace en los logs).
+    if (brevoKey && brevoKey.trim().length > 0) {
+      this.brevoApiKey = brevoKey.trim();
+      this.resend = null;
+      this.smtp = null;
+      this.provider = 'brevo';
+      // Remitente: debe ser un sender VERIFICADO en Brevo (p.ej. el Gmail del equipo).
+      this.fromEmail =
+        this.config.get<string>('BREVO_FROM_EMAIL') ||
+        smtpUser ||
+        this.config.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
+      this.logger.log('✅ Brevo (API HTTP) configurado — correos por HTTPS (Render no bloquea el 443)');
+    } else if (smtpHost && smtpUser && smtpPass) {
+      this.brevoApiKey = null;
       this.smtp = nodemailer.createTransport({
         host: smtpHost,
         port: parseInt(this.config.get<string>('SMTP_PORT', '465'), 10),
@@ -49,22 +64,25 @@ export class MailService {
       });
       this.resend = null;
       this.provider = 'smtp';
-      // En Gmail el "from" debe coincidir con la cuenta autenticada.
-      this.fromEmail = this.config.get<string>('SMTP_FROM') || smtpUser;
-      this.logger.log('✅ SMTP configurado — correos se enviarán por email');
+      // `fromEmail` es solo el email (el nombre lo añade send()); en Gmail debe
+      // coincidir con la cuenta autenticada. OJO: Render free bloquea SMTP saliente.
+      this.fromEmail = smtpUser;
+      this.logger.log('✅ SMTP configurado — correos por SMTP (OJO: Render free bloquea los puertos SMTP)');
     } else if (resendKey && resendKey.trim().length > 0) {
+      this.brevoApiKey = null;
       this.resend = new Resend(resendKey);
       this.smtp = null;
       this.provider = 'resend';
       this.fromEmail = this.config.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
-      this.logger.log('✅ Resend configurado — correos se enviarán por email');
+      this.logger.log('✅ Resend configurado — correos por API HTTP');
     } else {
+      this.brevoApiKey = null;
       this.resend = null;
       this.smtp = null;
       this.provider = 'console';
       this.fromEmail = this.config.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
       this.logger.warn(
-        '⚠️  Sin proveedor de correo (SMTP_* / RESEND_API_KEY) — los correos se imprimirán en consola',
+        '⚠️  Sin proveedor de correo (BREVO_API_KEY / SMTP_* / RESEND_API_KEY) — los correos se imprimirán en consola',
       );
     }
   }
@@ -205,6 +223,34 @@ La orientación es educativa y no sustituye un diagnóstico profesional.
     }
 
     try {
+      if (this.provider === 'brevo' && this.brevoApiKey) {
+        // API HTTP de Brevo (puerto 443) — no la bloquea Render como al SMTP.
+        const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'api-key': this.brevoApiKey,
+            'content-type': 'application/json',
+            accept: 'application/json',
+          },
+          body: JSON.stringify({
+            sender: { name: this.fromName, email: this.fromEmail },
+            to: [{ email: to }],
+            subject,
+            htmlContent: html,
+            textContent: text,
+          }),
+        });
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          this.logger.error(
+            `Brevo rechazó el correo a ${to}: HTTP ${res.status} ${detail.slice(0, 300)}`,
+          );
+          return; // No re-throw: un fallo de correo no debe tumbar el flujo principal
+        }
+        this.logger.log(`✉️  Correo enviado a ${to} vía Brevo (API HTTP)`);
+        return;
+      }
+
       if (this.provider === 'smtp' && this.smtp) {
         const info = await this.smtp.sendMail({ from, to, subject, html, text });
         this.logger.log(`✉️  Correo enviado a ${to} vía SMTP (id: ${info.messageId})`);
