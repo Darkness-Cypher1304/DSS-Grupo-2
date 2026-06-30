@@ -225,30 +225,39 @@ La orientación es educativa y no sustituye un diagnóstico profesional.
     try {
       if (this.provider === 'brevo' && this.brevoApiKey) {
         // API HTTP de Brevo (puerto 443) — no la bloquea Render como al SMTP.
-        const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-          method: 'POST',
-          headers: {
-            'api-key': this.brevoApiKey,
-            'content-type': 'application/json',
-            accept: 'application/json',
-          },
-          body: JSON.stringify({
-            sender: { name: this.fromName, email: this.fromEmail },
-            to: [{ email: to }],
-            subject,
-            htmlContent: html,
-            textContent: text,
-          }),
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          this.logger.error(
-            `Brevo rechazó el correo a ${to}: HTTP ${res.status} ${detail.slice(0, 300)}`,
-          );
-          return; // No re-throw: un fallo de correo no debe tumbar el flujo principal
+        // Timeout duro (AbortController) para que un envío lento no deje la conexión
+        // colgada indefinidamente. Va en segundo plano, así que no afecta la UX.
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        try {
+          const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+              'api-key': this.brevoApiKey,
+              'content-type': 'application/json',
+              accept: 'application/json',
+            },
+            body: JSON.stringify({
+              sender: { name: this.fromName, email: this.fromEmail },
+              to: [{ email: to }],
+              subject,
+              htmlContent: html,
+              textContent: text,
+            }),
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            const detail = await res.text().catch(() => '');
+            this.logger.error(
+              `Brevo rechazó el correo a ${to}: HTTP ${res.status} ${detail.slice(0, 300)}`,
+            );
+            return; // No re-throw: un fallo de correo no debe tumbar el flujo principal
+          }
+          this.logger.log(`✉️  Correo enviado a ${to} vía Brevo (API HTTP)`);
+          return;
+        } finally {
+          clearTimeout(timer);
         }
-        this.logger.log(`✉️  Correo enviado a ${to} vía Brevo (API HTTP)`);
-        return;
       }
 
       if (this.provider === 'smtp' && this.smtp) {

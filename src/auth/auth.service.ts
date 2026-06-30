@@ -103,7 +103,10 @@ export class AuthService {
           },
         });
         await this.redis.storeEmailVerificationToken(verificationToken, existing.id);
-        await this.mail.sendVerificationEmail(existing.email, existing.fullName, verificationToken);
+        this.dispatchMail(
+          this.mail.sendVerificationEmail(existing.email, existing.fullName, verificationToken),
+          'verify-resend',
+        );
         this.logger.warn(`Re-registro de cuenta sin verificar — reenviando verificación: ${dto.email}`);
       } else {
         this.logger.warn(`Intento de registro con email ya registrado/activo: ${dto.email}`);
@@ -142,9 +145,12 @@ export class AuthService {
     await this.redis.storeEmailVerificationToken(verificationToken, user.id);
 
     // ----------------------------------------------------------------------
-    // Enviar correo de verificación
+    // Enviar correo de verificación (NO bloquea: fire-and-forget)
     // ----------------------------------------------------------------------
-    await this.mail.sendVerificationEmail(user.email, user.fullName, verificationToken);
+    this.dispatchMail(
+      this.mail.sendVerificationEmail(user.email, user.fullName, verificationToken),
+      'verify',
+    );
 
     // ----------------------------------------------------------------------
     // Audit log
@@ -451,7 +457,10 @@ export class AuthService {
     });
 
     await this.redis.storePasswordResetToken(resetToken, user.id);
-    await this.mail.sendPasswordResetEmail(user.email, user.fullName, resetToken);
+    this.dispatchMail(
+      this.mail.sendPasswordResetEmail(user.email, user.fullName, resetToken),
+      'reset',
+    );
 
     return genericMessage;
   }
@@ -689,6 +698,20 @@ export class AuthService {
     });
 
     return { accessToken, refreshToken };
+  }
+
+  /**
+   * Envía un correo SIN bloquear el flujo HTTP (fire-and-forget). El correo es un
+   * efecto secundario: el registro/reset NO debe esperar (ni fallar) por el proveedor.
+   * Antes se hacía `await` → si el proveedor tardaba (p.ej. API HTTP desde Render free),
+   * la petición se colgaba hasta el timeout del frontend (30s) y mostraba un error,
+   * aunque el backend luego respondiera 201. Ahora la respuesta es inmediata y el envío
+   * ocurre en segundo plano (proceso persistente de Render). Los errores se registran.
+   */
+  private dispatchMail(promise: Promise<void>, context: string): void {
+    void promise.catch((err) =>
+      this.logger.error(`Fallo al enviar correo (${context}): ${(err as Error).message}`),
+    );
   }
 
   private async recordFailedAttempt(
