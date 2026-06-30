@@ -61,8 +61,29 @@ export class QuestionsService {
   // Listar consultas (RLS filtra automáticamente según rol)
   // --------------------------------------------------------------------------
   async list(userId: string, role: string) {
+    // Filtro EXPLÍCITO en capa de aplicación. NO se confía solo en el RLS, que
+    // está inerte cuando la app conecta como dueño de la BD (§5.1: NO FORCE →
+    // el dueño bypassa las políticas). Sin este `where`, un PARENT veía TODAS
+    // las consultas (fuga de datos / IDOR). Replica la política questions_visibility:
+    //   PARENT     → solo sus consultas
+    //   SPECIALIST → las asignadas a él (cualquier estado = su historial) + las
+    //                OPEN sin asignar (la bandeja "sin asignar")
+    //   ADMIN      → todas
+    const where =
+      role === UserRole.PARENT
+        ? { authorId: userId }
+        : role === UserRole.SPECIALIST
+          ? {
+              OR: [
+                { assignedToId: userId },
+                { assignedToId: null, status: QuestionStatus.OPEN },
+              ],
+            }
+          : {};
+
     return this.prisma.runWithUserContext(userId, role, async (tx) => {
       return tx.question.findMany({
+        where,
         orderBy: [{ isUrgent: 'desc' }, { createdAt: 'desc' }],
         include: {
           author: { select: { fullName: true } },
@@ -138,6 +159,39 @@ export class QuestionsService {
         },
       });
     });
+
+    // Notificar al padre que un especialista tomó su consulta — in-app (campana)
+    // + correo, ambos best-effort a nivel sistema (igual que answer()). No bloquea
+    // ni rompe el flujo de asignación si el proveedor de correo falla.
+    try {
+      const q = await this.prisma.question.findUnique({
+        where: { id: questionId },
+        select: { title: true, author: { select: { id: true, email: true, fullName: true } } },
+      });
+      if (q?.author?.id) {
+        await this.notifications.createForUser({
+          userId: q.author.id,
+          type: 'ASSIGNED',
+          title: 'Un especialista tomó tu consulta',
+          body: q.title,
+          relatedType: 'Question',
+          relatedId: questionId,
+        });
+      }
+      if (q?.author?.email) {
+        // Correo best-effort EN SEGUNDO PLANO: no bloquea la respuesta de "tomar
+        // consulta" por la latencia del proveedor (lección del flujo de auth).
+        void this.mail
+          .sendQuestionAssignedEmail(q.author.email, q.author.fullName, q.title)
+          .catch((e) =>
+            this.logger.warn(`No se pudo enviar correo de consulta tomada: ${(e as Error).message}`),
+          );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo notificar al padre que se tomó su consulta: ${(err as Error).message}`,
+      );
+    }
 
     return question;
   }
