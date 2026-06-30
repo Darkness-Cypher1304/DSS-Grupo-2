@@ -27,6 +27,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import {
   RegisterDto,
+  RegisterSpecialistDto,
   LoginDto,
   ChangePasswordDto,
   RequestPasswordResetDto,
@@ -61,6 +62,24 @@ export class AuthController {
   ): Promise<{ message: string }> {
     const userAgent = req.headers['user-agent'] || 'unknown';
     return this.authService.register(dto, ip, userAgent);
+  }
+
+  // --------------------------------------------------------------------------
+  // POST /auth/register-specialist — Registro público de especialista
+  // (queda PENDING hasta que un admin apruebe la colegiatura)
+  // --------------------------------------------------------------------------
+  @Public()
+  @Throttle({ default: { ttl: 60000, limit: 5 } }) // 5 registros/min por IP
+  @Post('register-specialist')
+  @ApiOperation({ summary: 'Registrar especialista (queda PENDING hasta aprobación del admin)' })
+  @ApiResponse({ status: 201, description: 'Cuenta creada en revisión, email enviado' })
+  async registerSpecialist(
+    @Body() dto: RegisterSpecialistDto,
+    @ClientIp() ip: string,
+    @Req() req: Request,
+  ): Promise<{ message: string }> {
+    const userAgent = req.headers['user-agent'] || 'unknown';
+    return this.authService.registerSpecialist(dto, ip, userAgent);
   }
 
   // --------------------------------------------------------------------------
