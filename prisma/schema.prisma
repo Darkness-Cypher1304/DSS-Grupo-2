@@ -28,12 +28,22 @@ enum UserRole {
   ADMIN
 }
 
-/// Estado del usuario
+/// Estado del usuario (ciclo de vida de la cuenta)
 enum UserStatus {
   PENDING_VERIFICATION  // recién registrado, pendiente de verificar email
   ACTIVE                // activo y verificado
-  SUSPENDED             // suspendido por admin
+  SUSPENDED             // suspendido temporalmente por NeuroAlert
   LOCKED                // bloqueado por intentos de login fallidos
+  INACTIVE              // baja aprobada (p.ej. especialista dado de baja); no accede, datos conservados
+  DISABLED              // deshabilitado definitivamente por NeuroAlert; solo un admin lo restaura
+  PENDING_DELETION      // el usuario solicitó eliminar su cuenta; en período de gracia
+}
+
+/// Estado de una solicitud de baja de especialista (SpecialistLeaveRequest)
+enum LeaveRequestStatus {
+  PENDING   // solicitada, esperando decisión del admin
+  APPROVED  // aprobada → cuenta pasa a INACTIVE
+  REJECTED  // rechazada (con nota)
 }
 
 /// Estado de verificación profesional del especialista
@@ -141,6 +151,11 @@ model User {
   // Solo para SPECIALIST
   specialistProfile          SpecialistProfile?
 
+  // Ciclo de vida / baja de cuenta (Etapa 3)
+  deletionRequestedAt DateTime? // inicio del período de gracia (autoeliminación)
+  deletionReason      String?   @db.Text
+  anonymizedAt        DateTime? // cuándo se anonimizó la PII (tras la gracia)
+
   // Timestamps
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -155,11 +170,39 @@ model User {
   contentCreated      Content[]
   resourcesUploaded   Resource[]
   auditLogs           AuditLog[]
+  leaveRequest        SpecialistLeaveRequest?
 
   @@index([email])
   @@index([role, status])
   @@index([deletedAt])
   @@map("users")
+}
+
+// ============================================================================
+// MODELO: SPECIALIST_LEAVE_REQUEST  (solicitud de baja del especialista)
+// ============================================================================
+// El especialista NO elimina su cuenta directamente: SOLICITA la baja. Un admin
+// la revisa (valida que no queden responsabilidades pendientes) y, si la aprueba,
+// la cuenta pasa a INACTIVE (no se borra; artículos/historial/auditoría se
+// conservan). RLS: ENABLE + NO FORCE (el dueño + el admin; el control real en app).
+model SpecialistLeaveRequest {
+  id           String             @id @default(cuid())
+  userId       String             @unique
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  reason       String             // motivo seleccionado
+  comments     String?            @db.Text
+
+  status       LeaveRequestStatus @default(PENDING)
+  reviewedById String?            // admin que decidió
+  reviewedAt   DateTime?
+  decisionNote String?            @db.Text
+
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([status, createdAt])
+  @@map("specialist_leave_requests")
 }
 
 // ============================================================================

@@ -359,17 +359,28 @@ export class AuthService {
     }
 
     // ----------------------------------------------------------------------
-    // 4) Verificar estado de la cuenta
+    // 4) Verificar estado de la cuenta (ciclo de vida, Etapa 3)
     // ----------------------------------------------------------------------
+    // Cuenta eliminada/anonimizada: no revelamos nada → credenciales inválidas.
+    if (user.deletedAt) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+    if (user.status === UserStatus.INACTIVE) {
+      throw new UnauthorizedException('Tu cuenta está inactiva. Contacta al administrador.');
+    }
+    if (user.status === UserStatus.DISABLED) {
+      throw new UnauthorizedException('Tu cuenta está deshabilitada. Contacta al administrador.');
+    }
     if (user.status === UserStatus.SUSPENDED) {
       throw new UnauthorizedException('Cuenta suspendida. Contacta al administrador.');
     }
-
     if (user.status === UserStatus.PENDING_VERIFICATION) {
       throw new UnauthorizedException(
         'Debes verificar tu correo electrónico antes de iniciar sesión.',
       );
     }
+    // PENDING_DELETION: se PERMITE iniciar sesión a propósito, para que el padre
+    // pueda CANCELAR la eliminación durante el período de gracia.
 
     // ----------------------------------------------------------------------
     // 5) Login exitoso — limpiar contadores, actualizar últimos datos
