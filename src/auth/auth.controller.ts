@@ -34,6 +34,7 @@ import {
   ResetPasswordDto,
   VerifyEmailDto,
   ResendVerificationDto,
+  ActivateSpecialistDto,
 } from './dto/auth.dto';
 import { Public, CurrentUser, ClientIp, AuthUser } from '../common/decorators';
 
@@ -200,6 +201,19 @@ export class AuthController {
   @ApiOperation({ summary: 'Resetear contraseña con token' })
   async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ message: string }> {
     return this.authService.resetPassword(dto);
+  }
+
+  // --------------------------------------------------------------------------
+  // POST /auth/activate-specialist — activar cuenta de especialista aprobado
+  // (crea su contraseña con el token de activación; pantalla 14)
+  // --------------------------------------------------------------------------
+  @Public()
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('activate-specialist')
+  @ApiOperation({ summary: 'Activar cuenta de especialista y crear contraseña' })
+  async activateSpecialist(@Body() dto: ActivateSpecialistDto): Promise<{ message: string }> {
+    return this.authService.activateSpecialist(dto.token, dto.password);
   }
 
   // --------------------------------------------------------------------------

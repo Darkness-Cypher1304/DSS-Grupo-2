@@ -44,6 +44,15 @@ enum SpecialistVerificationStatus {
   REJECTED      // rechazado
 }
 
+/// Estado de una POSTULACIÓN de especialista (MedicalApplication).
+/// A diferencia de SpecialistVerificationStatus (que vive en el perfil de un
+/// User YA existente), esto describe una solicitud que AÚN NO tiene cuenta.
+enum ApplicationStatus {
+  PENDING   // recibida, esperando revisión del admin
+  APPROVED  // aprobada → se creó la cuenta + enlace de activación
+  REJECTED  // rechazada (con motivo)
+}
+
 /// Estado del contenido educativo
 enum ContentStatus {
   DRAFT       // borrador, solo el autor lo ve
@@ -484,4 +493,67 @@ model Notification {
   @@index([userId, isRead])
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+// ============================================================================
+// MODELO: MEDICAL_APPLICATION  (postulación de especialista — SIN cuenta)
+// ============================================================================
+// El especialista NO se "registra": POSTULA. Al enviar el formulario NO se crea
+// ningún User, contraseña ni sesión — solo esta solicitud en estado PENDING.
+// La cuenta (User rol SPECIALIST) se crea SOLO cuando un ADMIN aprueba, dentro
+// de una transacción atómica, y el especialista define su contraseña vía un
+// enlace de activación de un solo uso (nunca se envía contraseña por correo).
+// SEGURIDAD (§9 del flujo): se guardan hash SHA-256 de los documentos, fecha e
+// IP de la solicitud; toda aprobación/rechazo queda en el AuditLog (quién/cuándo/IP).
+// RLS: ENABLE + NO FORCE (igual que el resto). El control real vive en la capa
+// app; el INSERT es público (postulación anónima), el resto es solo ADMIN.
+model MedicalApplication {
+  id                  String            @id @default(cuid())
+
+  // Datos personales y profesionales (pantalla 9.5)
+  firstName           String
+  lastName            String
+  email               String            @db.Citext
+  phoneNumber         String
+  licenseNumber       String            // colegiatura (CMP/CPsP)
+  specialty           String
+  university          String
+  country             String
+
+  // Documentos (referencias a FileObject) + integridad (RF-26/27, §9)
+  cvFileId            String
+  cvSha256            String
+  dniFileId           String
+  dniSha256           String
+  linkedinUrl         String?           // opcional
+
+  // Perfil profesional
+  yearsOfExperience   Int               @default(0)
+  availability        String            @db.Text
+  motivationLetter    String            @db.Text
+
+  // Consentimiento + contexto de seguridad (§9: fecha + IP de la solicitud)
+  consentAccepted     Boolean           @default(false)
+  submittedIp         String
+  submittedUserAgent  String?
+
+  // Revisión del administrador
+  status              ApplicationStatus @default(PENDING)
+  reviewedById        String?           // admin que decidió
+  reviewedAt          DateTime?
+  rejectionReason     String?           @db.Text
+  checklist           Json?             // snapshot del checklist marcado al aprobar
+
+  // Activación de la cuenta (se llena SOLO al aprobar)
+  createdUserId       String?           @unique  // User creado tras la aprobación
+  activationToken     String?           @unique  // token de un solo uso (24 h)
+  activationExpiresAt DateTime?
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([status, createdAt])
+  @@index([email])
+  @@index([licenseNumber])
+  @@map("medical_applications")
 }

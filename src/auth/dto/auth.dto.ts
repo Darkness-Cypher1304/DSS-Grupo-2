@@ -189,6 +189,24 @@ export class ResetPasswordDto {
 }
 
 // ---------------------------------------------------------------------------
+// ACTIVACIÓN DE ESPECIALISTA (pantalla 14) — crear contraseña con token
+// El especialista aprobado define su contraseña vía enlace de un solo uso.
+// ---------------------------------------------------------------------------
+export class ActivateSpecialistDto {
+  @ApiProperty({ description: 'Token de activación recibido por correo' })
+  @IsString()
+  @MinLength(32)
+  @MaxLength(256)
+  token!: string;
+
+  @ApiProperty({ example: 'MiClave2026Segura!', description: 'Contraseña (mín 12 caracteres)' })
+  @IsString()
+  @MinLength(12, { message: 'La contraseña debe tener al menos 12 caracteres' })
+  @MaxLength(128)
+  password!: string;
+}
+
+// ---------------------------------------------------------------------------
 // VERIFICACIÓN DE EMAIL
 // ---------------------------------------------------------------------------
 export class VerifyEmailDto {
