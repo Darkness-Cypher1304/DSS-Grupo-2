@@ -62,7 +62,7 @@ export class ApplicationsService {
     ip: string,
     userAgent: string,
   ): Promise<{ message: string; applicationId: string }> {
-    if (!dto.consentAccepted) {
+    if (dto.consentAccepted !== 'true') {
       throw new BadRequestException(
         'Debes aceptar que NeuroAlert verifique tus credenciales para postular.',
       );
@@ -124,7 +124,7 @@ export class ApplicationsService {
         yearsOfExperience: dto.yearsOfExperience,
         availability: dto.availability,
         motivationLetter: dto.motivationLetter,
-        consentAccepted: dto.consentAccepted,
+        consentAccepted: dto.consentAccepted === 'true',
         submittedIp: ip,
         submittedUserAgent: userAgent,
         status: ApplicationStatus.PENDING,

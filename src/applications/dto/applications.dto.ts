@@ -17,14 +17,12 @@ import {
   Min,
   Max,
   IsBoolean,
+  IsIn,
   IsObject,
   ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-
-const toBool = ({ value }: { value: unknown }): boolean =>
-  value === true || value === 'true' || value === '1' || value === 'on';
 
 const toInt = ({ value }: { value: unknown }): number =>
   typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
@@ -111,10 +109,13 @@ export class SubmitApplicationDto {
   @MaxLength(3000)
   motivationLetter!: string;
 
-  @ApiProperty({ example: true, description: 'Acepta que NeuroAlert verifique sus credenciales' })
-  @Transform(toBool)
-  @IsBoolean()
-  consentAccepted!: boolean;
+  // Se recibe como string en multipart ('true'/'false'). Se valida como string a
+  // propósito: tipar como boolean + enableImplicitConversion global convierte
+  // "false" en `true` (Boolean de string no vacío) y saltaría el consentimiento.
+  @ApiProperty({ example: 'true', description: 'Acepta que NeuroAlert verifique sus credenciales' })
+  @IsString()
+  @IsIn(['true', 'false'], { message: 'Consentimiento inválido' })
+  consentAccepted!: string;
 }
 
 // ---------------------------------------------------------------------------
