@@ -1,0 +1,34 @@
+name: Ciclo de vida de cuentas (bajas vencidas)
+
+# Reemplaza a un cron/worker de Render (no permitido en free-tier): un GitHub
+# Actions programado invoca a diario el endpoint protegido que anonimiza las
+# cuentas cuyo período de gracia venció. Inerte y seguro si no está configurado.
+#
+# Configuración (una sola vez):
+#   1) En Render, en miapp y miapp-dev: variable CRON_SECRET=<valor secreto>.
+#   2) En GitHub → Settings → Secrets and variables → Actions: secret CRON_SECRET
+#      con el MISMO valor.
+on:
+  schedule:
+    - cron: '0 6 * * *' # diario 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  process-expired-deletions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Procesar bajas vencidas (prod + dev)
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET no configurado en los secrets del repo — se omite (inerte)."
+            exit 0
+          fi
+          for API in https://miapp-6ex5.onrender.com https://miapp-dev.onrender.com; do
+            echo "→ $API"
+            code=$(curl -s -o /tmp/out.json -w "%{http_code}" -X POST \
+              "$API/api/users/system/process-deletions" \
+              -H "x-cron-secret: $CRON_SECRET" || echo "000")
+            echo "  HTTP $code · $(cat /tmp/out.json 2>/dev/null || echo sin-cuerpo)"
+          done

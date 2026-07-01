@@ -98,3 +98,49 @@ export class VerifySpecialistDto {
   @MaxLength(1000)
   rejectionReason?: string;
 }
+
+// ----------------------------------------------------------------------------
+// Autoeliminación de cuenta — PADRE (Etapa 3)
+// Requiere reautenticación con la contraseña actual (además del "ELIMINAR" del UI).
+// ----------------------------------------------------------------------------
+export class RequestAccountDeletionDto {
+  @ApiProperty({ description: 'Contraseña actual (reautenticación)' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  password!: string;
+
+  @ApiProperty({ required: false, description: 'Motivo opcional' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+// ----------------------------------------------------------------------------
+// Solicitud de baja — ESPECIALISTA (Etapa 3)
+// ----------------------------------------------------------------------------
+export class RequestLeaveDto {
+  @ApiProperty({ example: 'Finalización de colaboración' })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(120)
+  reason!: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comments?: string;
+}
+
+// ----------------------------------------------------------------------------
+// Decisión del admin sobre una solicitud de baja (aprobar/rechazar) — nota opcional
+// ----------------------------------------------------------------------------
+export class LeaveDecisionDto {
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
