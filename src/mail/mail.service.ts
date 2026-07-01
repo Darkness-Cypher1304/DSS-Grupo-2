@@ -15,6 +15,27 @@ import type { Transporter } from 'nodemailer';
 
 type MailProvider = 'brevo' | 'smtp' | 'resend' | 'console';
 
+// Correo de soporte de NeuroAlert (parámetro global fijo del proyecto).
+export const SUPPORT_EMAIL = 'U20241E211@UPC.EDU.PE';
+
+// Resumen de la postulación para el correo de confirmación (pantalla 11).
+export interface ApplicationSummary {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phoneNumber: string;
+  licenseNumber: string;
+  specialty: string;
+  university: string;
+  country: string;
+  linkedinUrl?: string;
+  yearsOfExperience: number;
+  availability: string;
+  motivationLetter: string;
+  cvFileName: string;
+  dniFileName: string;
+}
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -242,6 +263,167 @@ Un especialista tomó tu consulta y la está revisando: "${questionTitle}"
 Síguela en: ${consultUrl}
 
 Te avisaremos cuando haya una respuesta.
+    `.trim();
+
+    await this.send(to, subject, html, text);
+  }
+
+  // --------------------------------------------------------------------------
+  // POSTULACIÓN RECIBIDA (pantalla 11) — con RESUMEN COMPLETO de lo enviado
+  // --------------------------------------------------------------------------
+  async sendApplicationReceivedEmail(
+    to: string,
+    fullName: string,
+    summary: ApplicationSummary,
+  ): Promise<void> {
+    const lastName = this.escapeHtml(summary.lastName);
+    const subject = '📋 Recibimos tu postulación — NeuroAlert';
+
+    const row = (label: string, value: string): string => `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #eee;color:#666;font-size:13px;white-space:nowrap;vertical-align:top">${this.escapeHtml(label)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #eee;color:#1a1a1a;font-size:13px">${this.escapeHtml(value)}</td>
+      </tr>`;
+
+    const summaryRows = [
+      row('Nombre', summary.firstName),
+      row('Apellido', summary.lastName),
+      row('Correo', summary.email),
+      row('Teléfono', summary.phoneNumber),
+      row('Colegiatura (CMP)', summary.licenseNumber),
+      row('Especialidad', summary.specialty),
+      row('Universidad', summary.university),
+      row('País', summary.country),
+      summary.linkedinUrl ? row('LinkedIn', summary.linkedinUrl) : '',
+      row('Años de experiencia', String(summary.yearsOfExperience)),
+      row('Disponibilidad', summary.availability),
+      row('Carta de motivación', summary.motivationLetter),
+      row('Currículum (PDF)', summary.cvFileName),
+      row('Documento de identidad', summary.dniFileName),
+    ].join('');
+
+    const html = this.layout(`
+      <h1 style="margin:0 0 16px;color:#0f4c47;font-size:24px">Solicitud recibida correctamente</h1>
+      <p>Hola <strong>Dr(a). ${lastName}</strong>,</p>
+      <p>
+        Hemos recibido tu solicitud para formar parte del equipo de especialistas de NeuroAlert.
+        Nuestro equipo revisará tu información y se comunicará contigo para coordinar una reunión de evaluación.
+      </p>
+      <p style="color:#666;font-size:14px">
+        Si detectas algún error en tus datos, escríbenos a
+        <a href="mailto:${SUPPORT_EMAIL}" style="color:#0f4c47">${SUPPORT_EMAIL}</a>.
+      </p>
+      <h2 style="margin:28px 0 8px;color:#0f4c47;font-size:16px">Resumen de tu postulación</h2>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #eee;border-radius:8px;overflow:hidden">
+        ${summaryRows}
+      </table>
+      <p style="color:#999;font-size:13px;margin-top:24px">
+        Revisa que todo esté correcto. Aún no se ha creado ninguna cuenta: eso ocurrirá solo si tu
+        postulación es aprobada, cuando recibirás un enlace para activar tu cuenta.
+      </p>
+    `);
+
+    const text = `
+Hola Dr(a). ${summary.lastName},
+
+Recibimos tu postulación para el equipo de especialistas de NeuroAlert. La revisaremos y te
+contactaremos para coordinar una reunión de evaluación. Si hay algún error, escribe a ${SUPPORT_EMAIL}.
+
+Resumen de tu postulación:
+- Nombre: ${summary.firstName}
+- Apellido: ${summary.lastName}
+- Correo: ${summary.email}
+- Teléfono: ${summary.phoneNumber}
+- Colegiatura (CMP): ${summary.licenseNumber}
+- Especialidad: ${summary.specialty}
+- Universidad: ${summary.university}
+- País: ${summary.country}${summary.linkedinUrl ? `\n- LinkedIn: ${summary.linkedinUrl}` : ''}
+- Años de experiencia: ${summary.yearsOfExperience}
+- Disponibilidad: ${summary.availability}
+- Carta de motivación: ${summary.motivationLetter}
+- Currículum (PDF): ${summary.cvFileName}
+- Documento de identidad: ${summary.dniFileName}
+
+Aún no se ha creado ninguna cuenta; eso ocurrirá solo si tu postulación es aprobada.
+    `.trim();
+
+    await this.send(to, subject, html, text);
+  }
+
+  // --------------------------------------------------------------------------
+  // POSTULACIÓN APROBADA (pantalla 13) — SIN contraseña, con enlace de activación
+  // --------------------------------------------------------------------------
+  async sendApplicationApprovedEmail(to: string, fullName: string, token: string): Promise<void> {
+    const activateUrl = `${this.frontendUrl}/activar?token=${encodeURIComponent(token)}`;
+    const lastName = this.escapeHtml(fullName.split(' ').slice(-1)[0] || fullName);
+    const subject = '🎉 Bienvenido al equipo de NeuroAlert';
+
+    const html = this.layout(`
+      <h1 style="margin:0 0 16px;color:#0f4c47;font-size:24px">Bienvenido al equipo de NeuroAlert</h1>
+      <p>Hola <strong>Dr(a). ${lastName}</strong>,</p>
+      <p>Tu solicitud ha sido <strong>aprobada</strong>. Ya formas parte de nuestro equipo de especialistas.</p>
+      <p>Para activar tu cuenta y crear tu contraseña, haz clic en el botón:</p>
+      <p style="text-align:center;margin:32px 0">
+        <a href="${activateUrl}" style="background:#0f4c47;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">
+          Activar mi cuenta
+        </a>
+      </p>
+      <p style="color:#666;font-size:14px">
+        O copia este enlace en tu navegador:<br>
+        <span style="word-break:break-all;color:#0f4c47">${activateUrl}</span>
+      </p>
+      <p style="color:#999;font-size:13px;margin-top:24px">
+        Por seguridad, este enlace expira en 24 horas y es de un solo uso. Nunca te enviaremos una
+        contraseña por correo: tú la defines al activar tu cuenta.
+        Si detectas alguna inconsistencia, contáctanos a
+        <a href="mailto:${SUPPORT_EMAIL}" style="color:#0f4c47">${SUPPORT_EMAIL}</a>.
+      </p>
+    `);
+
+    const text = `
+Hola Dr(a). ${fullName},
+
+Tu solicitud fue APROBADA. Ya formas parte del equipo de especialistas de NeuroAlert.
+Activa tu cuenta y crea tu contraseña aquí (enlace de un solo uso, expira en 24 h):
+${activateUrl}
+
+Nunca enviamos contraseñas por correo: tú la defines al activar.
+¿Alguna inconsistencia? Escríbenos a ${SUPPORT_EMAIL}.
+    `.trim();
+
+    await this.send(to, subject, html, text);
+  }
+
+  // --------------------------------------------------------------------------
+  // POSTULACIÓN RECHAZADA (con motivo)
+  // --------------------------------------------------------------------------
+  async sendApplicationRejectedEmail(to: string, fullName: string, reason: string): Promise<void> {
+    const lastName = this.escapeHtml(fullName.split(' ').slice(-1)[0] || fullName);
+    const subject = 'Sobre tu postulación — NeuroAlert';
+
+    const html = this.layout(`
+      <h1 style="margin:0 0 16px;color:#0f4c47;font-size:24px">Resultado de tu postulación</h1>
+      <p>Hola <strong>Dr(a). ${lastName}</strong>,</p>
+      <p>
+        Agradecemos tu interés en formar parte de NeuroAlert. Tras revisar tu solicitud, por ahora
+        no podemos aprobarla por el siguiente motivo:
+      </p>
+      <p style="background:#fdf3f2;border-left:3px solid #b3261e;padding:12px 16px;border-radius:6px;color:#7a1c17">
+        ${this.escapeHtml(reason)}
+      </p>
+      <p style="color:#666;font-size:14px">
+        Si crees que se trata de un error o deseas más información, escríbenos a
+        <a href="mailto:${SUPPORT_EMAIL}" style="color:#0f4c47">${SUPPORT_EMAIL}</a>.
+      </p>
+    `);
+
+    const text = `
+Hola Dr(a). ${fullName},
+
+Gracias por tu interés en NeuroAlert. Por ahora no podemos aprobar tu postulación.
+Motivo: ${reason}
+
+¿Dudas o crees que es un error? Escríbenos a ${SUPPORT_EMAIL}.
     `.trim();
 
     await this.send(to, subject, html, text);

@@ -23,7 +23,13 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { User, UserRole, UserStatus, SpecialistVerificationStatus } from '@prisma/client';
+import {
+  User,
+  UserRole,
+  UserStatus,
+  SpecialistVerificationStatus,
+  ApplicationStatus,
+} from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../config/redis.module';
@@ -701,6 +707,78 @@ export class AuthService {
     });
 
     return { message: 'Contraseña actualizada. Ya puedes iniciar sesión.' };
+  }
+
+  // ==========================================================================
+  // ACTIVAR CUENTA DE ESPECIALISTA (pantalla 14) — crear contraseña con token
+  // ==========================================================================
+  /**
+   * Activa la cuenta de un especialista APROBADO: valida el token de un solo uso
+   * (generado al aprobar la postulación, 24 h de vida), define la contraseña real
+   * que el propio especialista elige (NUNCA se envía por correo) y deja la cuenta
+   * ACTIVE + emailVerified (clicar el enlace prueba control del inbox). El token
+   * se consume (se pone a null) para que no pueda reutilizarse.
+   */
+  async activateSpecialist(token: string, password: string): Promise<{ message: string }> {
+    const app = await this.prisma.medicalApplication.findUnique({
+      where: { activationToken: token },
+    });
+
+    if (
+      !app ||
+      app.status !== ApplicationStatus.APPROVED ||
+      !app.createdUserId ||
+      !app.activationExpiresAt
+    ) {
+      throw new BadRequestException('Enlace de activación inválido.');
+    }
+
+    if (app.activationExpiresAt < new Date()) {
+      throw new BadRequestException('El enlace de activación expiró. Contacta a soporte.');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: app.createdUserId } });
+    if (!user) throw new BadRequestException('Enlace de activación inválido.');
+
+    if (user.status === UserStatus.ACTIVE) {
+      throw new BadRequestException('Tu cuenta ya está activada. Inicia sesión.');
+    }
+
+    if (isCommonPassword(password)) {
+      throw new BadRequestException(
+        'Esa contraseña es demasiado común o débil. Elige una más difícil de adivinar.',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(password, this.bcryptRounds);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash,
+          emailVerified: true,
+          status: UserStatus.ACTIVE,
+        },
+      }),
+      // Consumir el token (un solo uso).
+      this.prisma.medicalApplication.update({
+        where: { id: app.id },
+        data: { activationToken: null, activationExpiresAt: null },
+      }),
+    ]);
+
+    await this.audit.log({
+      userId: user.id,
+      action: 'USER_EMAIL_VERIFIED',
+      entityType: 'User',
+      entityId: user.id,
+      ipAddress: 'unknown',
+      success: true,
+      metadata: { event: 'SPECIALIST_ACTIVATED', applicationId: app.id },
+    });
+
+    return { message: 'Cuenta activada. Ya puedes iniciar sesión.' };
   }
 
   // ==========================================================================

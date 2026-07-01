@@ -25,6 +25,7 @@ import { AuditModule } from './audit/audit.module';
 import { MailModule } from './mail/mail.module';
 import { StorageModule } from './storage/storage.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { ApplicationsModule } from './applications/applications.module';
 import { HealthModule } from './health/health.module';
 
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
@@ -127,6 +128,7 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
     MailModule,
     StorageModule,
     NotificationsModule,
+    ApplicationsModule,
     HealthModule,
   ],
   providers: [
