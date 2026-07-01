@@ -23,13 +23,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import {
-  User,
-  UserRole,
-  UserStatus,
-  SpecialistVerificationStatus,
-  ApplicationStatus,
-} from '@prisma/client';
+import { User, UserRole, UserStatus, ApplicationStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../config/redis.module';
@@ -37,7 +31,6 @@ import { MailService } from '../mail/mail.service';
 import { AuditService } from '../audit/audit.service';
 import {
   RegisterDto,
-  RegisterSpecialistDto,
   LoginDto,
   ChangePasswordDto,
   ResetPasswordDto,
@@ -183,122 +176,6 @@ export class AuthService {
     });
 
     return genericRegisterMessage;
-  }
-
-  // ==========================================================================
-  // REGISTRO DE ESPECIALISTA (público) — cuenta + perfil PENDING (atómico)
-  // ==========================================================================
-  /**
-   * Registro público de un especialista. Crea el usuario IGUAL que un padre
-   * (rol PARENT, PENDING_VERIFICATION) y, en la MISMA transacción, un
-   * SpecialistProfile en estado PENDING. El rol NO sube a SPECIALIST hasta que
-   * un ADMIN apruebe la colegiatura (PATCH /users/admin/specialists/:id/verify).
-   * Mismas defensas que register(): blocklist de contraseñas + anti-enumeración.
-   */
-  async registerSpecialist(
-    dto: RegisterSpecialistDto,
-    ip: string,
-    userAgent: string,
-  ): Promise<{ message: string }> {
-    if (isCommonPassword(dto.password)) {
-      throw new BadRequestException(
-        'Esa contraseña es demasiado común o débil. Elige una más difícil de adivinar.',
-      );
-    }
-
-    const genericMessage = {
-      message:
-        'Te enviamos un correo de verificación. Tras verificarlo, un administrador revisará tu colegiatura.',
-    };
-
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      select: { id: true, email: true, fullName: true, status: true },
-    });
-
-    if (existing) {
-      // Anti-enumeración: no revelamos que el email existe. Si sigue sin verificar,
-      // reenviamos la verificación (NO tocamos su perfil ni sus datos).
-      if (existing.status === UserStatus.PENDING_VERIFICATION) {
-        const t = randomBytes(32).toString('hex');
-        await this.prisma.user.update({
-          where: { id: existing.id },
-          data: {
-            emailVerificationToken: t,
-            emailVerificationExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
-          },
-        });
-        await this.redis.storeEmailVerificationToken(t, existing.id);
-        this.dispatchMail(
-          this.mail.sendVerificationEmail(existing.email, existing.fullName, t),
-          'verify-resend',
-        );
-      }
-      return genericMessage;
-    }
-
-    const passwordHash = await bcrypt.hash(dto.password, this.bcryptRounds);
-    const verificationToken = randomBytes(32).toString('hex');
-    const verificationExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
-
-    let user: User;
-    try {
-      // Atómico: si la colegiatura ya existe (licenseNumber @unique) o hay carrera
-      // en el email, NO queda un usuario huérfano (rollback de toda la transacción).
-      user = await this.prisma.$transaction(async (tx) => {
-        const u = await tx.user.create({
-          data: {
-            email: dto.email,
-            passwordHash,
-            fullName: dto.fullName,
-            phoneNumber: dto.phoneNumber,
-            role: UserRole.PARENT, // sube a SPECIALIST solo tras aprobación del admin
-            status: UserStatus.PENDING_VERIFICATION,
-            emailVerificationToken: verificationToken,
-            emailVerificationExpiresAt: verificationExpiresAt,
-          },
-        });
-        await tx.specialistProfile.create({
-          data: {
-            userId: u.id,
-            licenseNumber: dto.licenseNumber,
-            specialty: dto.specialty,
-            institution: dto.institution,
-            yearsOfExperience: dto.yearsOfExperience,
-            bio: dto.bio,
-            verificationStatus: SpecialistVerificationStatus.PENDING,
-          },
-        });
-        return u;
-      });
-    } catch (err) {
-      // P2002 = violación de unicidad (colegiatura ya registrada, o carrera de email).
-      if ((err as { code?: string }).code === 'P2002') {
-        throw new BadRequestException(
-          'No pudimos completar el registro. Verifica que tu número de colegiatura no esté ya registrado.',
-        );
-      }
-      throw err;
-    }
-
-    await this.redis.storeEmailVerificationToken(verificationToken, user.id);
-    this.dispatchMail(
-      this.mail.sendVerificationEmail(user.email, user.fullName, verificationToken),
-      'verify',
-    );
-
-    await this.audit.log({
-      userId: user.id,
-      action: 'USER_REGISTERED',
-      entityType: 'User',
-      entityId: user.id,
-      ipAddress: ip,
-      userAgent,
-      success: true,
-      metadata: { request: 'SPECIALIST_REGISTRATION' },
-    });
-
-    return genericMessage;
   }
 
   // ==========================================================================

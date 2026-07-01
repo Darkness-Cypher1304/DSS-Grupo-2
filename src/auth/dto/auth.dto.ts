@@ -14,10 +14,6 @@ import {
   Matches,
   IsOptional,
   IsEnum,
-  IsPhoneNumber,
-  IsInt,
-  Min,
-  Max,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
@@ -62,71 +58,6 @@ export class RegisterDto {
   // role NO se acepta del cliente — siempre se crea como PARENT por defecto.
   // Cambiar a SPECIALIST requiere flujo separado con verificación de admin.
   // ESTO ES PREVENCIÓN DE MASS ASSIGNMENT.
-}
-
-// ---------------------------------------------------------------------------
-// REGISTRO DE ESPECIALISTA (público)
-// Crea la cuenta (rol PARENT, PENDING_VERIFICATION) + perfil de especialista en
-// estado PENDING. El rol sube a SPECIALIST solo cuando el ADMIN aprueba.
-// ---------------------------------------------------------------------------
-export class RegisterSpecialistDto {
-  @ApiProperty({ example: 'dra.lopez@hospital.pe' })
-  @IsEmail({}, { message: 'El email no es válido' })
-  @MaxLength(255)
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase().trim() : value))
-  email!: string;
-
-  @ApiProperty({ example: 'MiClave2026Segura!' })
-  @IsString()
-  @MinLength(12, { message: 'La contraseña debe tener al menos 12 caracteres' })
-  @MaxLength(128)
-  password!: string;
-
-  @ApiProperty({ example: 'María López Quispe' })
-  @IsString()
-  @MinLength(2)
-  @MaxLength(100)
-  @Matches(/^[A-Za-zÀ-ÿñÑ\s'-]+$/, {
-    message: 'El nombre solo puede contener letras y espacios',
-  })
-  fullName!: string;
-
-  @ApiProperty({ required: false, example: '+51987654321' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(20)
-  @Matches(/^\+?[0-9\s-]{6,20}$/, { message: 'El teléfono no es válido' })
-  phoneNumber?: string;
-
-  @ApiProperty({ example: 'CMP-12345', description: 'Número de colegiatura (CMP/CPsP)' })
-  @IsString()
-  @MinLength(3)
-  @MaxLength(50)
-  licenseNumber!: string;
-
-  @ApiProperty({ example: 'Pediatría del Desarrollo' })
-  @IsString()
-  @MinLength(3)
-  @MaxLength(100)
-  specialty!: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  institution?: string;
-
-  @ApiProperty({ example: 5, minimum: 0, maximum: 60 })
-  @IsInt()
-  @Min(0)
-  @Max(60)
-  yearsOfExperience!: number;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  bio?: string;
 }
 
 // ---------------------------------------------------------------------------
