@@ -75,6 +75,25 @@ export class ApplicationsService {
       throw new BadRequestException('El currículum debe ser un archivo PDF.');
     }
 
+    // El correo ya pertenece a una cuenta existente → la postulación PÚBLICA no
+    // procede: esa persona debe iniciar sesión y postular como especialista desde
+    // su perfil ("Ser especialista", flujo de upgrade). Se detecta AQUÍ (en el
+    // envío), no al aprobar, para no hacer trabajar en vano al postulante ni al
+    // admin, y para que la creación de cuenta al aprobar nunca choque (P2002).
+    // (Trade-off consciente: en un formulario de postulación —no de login— guiar
+    //  a un usuario legítimo pesa más que la mínima fuga de enumeración, que
+    //  además está limitada por el rate-limit y la fricción de subir documentos.)
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+      select: { id: true },
+    });
+    if (existingUser) {
+      throw new ConflictException(
+        'Ese correo ya está asociado a una cuenta de NeuroAlert. Inicia sesión y postula como ' +
+          'especialista desde tu perfil, en la opción "Ser especialista".',
+      );
+    }
+
     // Prevenir postulaciones duplicadas ANTES de guardar archivos (evita huérfanos).
     const dup = await this.prisma.medicalApplication.findFirst({
       where: {
