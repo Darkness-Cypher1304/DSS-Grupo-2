@@ -1,0 +1,48 @@
+-- ============================================================================
+-- NeuroAlert · RLS Fase 2 (incremental) — FORCE en mchat_screenings + audit_logs
+-- ============================================================================
+-- Contexto: en Render la app conecta como DUEÑO de la BD (no superuser). Con
+-- ENABLE + NO FORCE el dueño BYPASSA las políticas RLS → hoy son inertes en
+-- runtime (la protección real es la capa app, que YA cierra IDOR, §16.1). FORCE
+-- somete también al dueño a las políticas → defensa en profundidad REAL.
+--
+-- Este paso activa FORCE SOLO en las DOS tablas donde es demostrablemente seguro
+-- (cero cambios de código, cero riesgo de arranque del contenedor). El resto de
+-- tablas queda en NO FORCE de forma DELIBERADA y documentada (ver SECURITY §RLS
+-- Fase 2 / HANDOFF §21.2): refresh_tokens (seguridad por secreto único, no por
+-- ownership), notifications / medical_applications / file_objects (escrituras a
+-- nivel sistema o anónimas), contents (requiere refactor de 14 queries + seed),
+-- questions/answers (requieren cerrar un gap de notificación antes de FORCE).
+--
+-- Idempotente: ALTER ... FORCE ROW LEVEL SECURITY no falla si ya está aplicado.
+--
+-- ROLLBACK de emergencia (si un flujo se rompiera en el deploy):
+--   ALTER TABLE mchat_screenings NO FORCE ROW LEVEL SECURITY;
+--   ALTER TABLE audit_logs       NO FORCE ROW LEVEL SECURITY;
+-- (ejecutable en la consola de la BD de Render, o vía nueva migración NO FORCE).
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 1. mchat_screenings — datos clínicos más sensibles (screening TEA del menor).
+--    TODAS las queries de MchatService (submit/getMyHistory/getOne) YA corren
+--    dentro de runWithUserContext(parentId|adminId, role). La policy vigente
+--    `mchat_parent_isolation` (FOR ALL USING role=ADMIN OR parentId=uid) cubre
+--    también el INSERT (en una policy FOR ALL sin WITH CHECK, Postgres usa la
+--    expresión USING como WITH CHECK). El seed NO inserta screenings → arranque
+--    del contenedor no se ve afectado. Cumple RNF-01 (la BD aísla aunque haya
+--    bug en la app).
+-- ----------------------------------------------------------------------------
+ALTER TABLE mchat_screenings FORCE ROW LEVEL SECURITY;
+
+-- ----------------------------------------------------------------------------
+-- 2. audit_logs — bitácora de auditoría (RNF-19: append-only inmutable).
+--    INSERT: policy `audit_logs_insert_anyone` WITH CHECK (TRUE) → los inserts
+--    del sistema (a veces userId NULL, sin contexto) siguen funcionando bajo
+--    FORCE. SELECT: `audit_logs_admin_read_only` y AuditService.findMany/count
+--    YA corren en runWithUserContext(adminId, 'ADMIN'). UPDATE/DELETE: policies
+--    USING (FALSE) → con FORCE aplican también al DUEÑO ⇒ INMUTABILIDAD REAL a
+--    nivel BD (hoy, con NO FORCE, el dueño podría alterar el log). Verificado:
+--    NO existe ni un solo auditLog.update/delete/upsert en el código; el seed no
+--    inserta audit_logs → arranque del contenedor no se ve afectado.
+-- ----------------------------------------------------------------------------
+ALTER TABLE audit_logs FORCE ROW LEVEL SECURITY;
