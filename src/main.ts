@@ -87,7 +87,7 @@ async function bootstrap() {
   app.use(compression());
 
   // --------------------------------------------------------------------------
-  // Trust proxy (estamos detrás de Nginx)
+  // Trust proxy (estamos detrás del proxy de Render)
   // --------------------------------------------------------------------------
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
