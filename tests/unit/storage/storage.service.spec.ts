@@ -79,6 +79,29 @@ describe('StorageService', () => {
         service.storeFile(PNG, 'img.png', 'image/png', 'avatars'),
       ).resolves.toBeDefined();
     });
+
+    it('acepta WebP válido (RIFF + "WEBP" en bytes 8..11)', async () => {
+      const webp = Buffer.concat([
+        Buffer.from([0x52, 0x49, 0x46, 0x46]),
+        Buffer.from([0, 0, 0, 0]),
+        Buffer.from('WEBP'),
+        Buffer.from('datos'),
+      ]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.fileObject.create.mockResolvedValue({ id: 'f3' } as any);
+      await expect(service.storeFile(webp, 'i.webp', 'image/webp', 'avatars')).resolves.toBeDefined();
+    });
+
+    it('rechaza un WebP con RIFF pero sin la firma "WEBP"', async () => {
+      const fakeWebp = Buffer.concat([
+        Buffer.from([0x52, 0x49, 0x46, 0x46]),
+        Buffer.from([0, 0, 0, 0]),
+        Buffer.from('XXXX'),
+      ]);
+      await expect(
+        service.storeFile(fakeWebp, 'i.webp', 'image/webp', 'avatars'),
+      ).rejects.toThrow(/WebP no es válido/i);
+    });
   });
 
   describe('getFile / getMeta / deleteFile', () => {

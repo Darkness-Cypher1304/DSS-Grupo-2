@@ -180,6 +180,22 @@ describe('QuestionsService', () => {
       );
       expect(res).toMatchObject({ id: 'a1' });
     });
+
+    it('conserva el especialista ya asignado al responder', async () => {
+      prisma.question.findUnique
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .mockResolvedValueOnce({ id: 'q1', assignedToId: 'esp-previo' } as any)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .mockResolvedValueOnce({ title: 'C', author: { id: USER_IDS.parent, email: 'p@test.pe', fullName: 'P' } } as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.answer.create.mockResolvedValue({ id: 'a2' } as any);
+
+      await service.answer(USER_IDS.specialist, UserRole.SPECIALIST, 'q1', { body: 'x'.repeat(25) }, 'ip');
+
+      expect(prisma.question.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ assignedToId: 'esp-previo' }) }),
+      );
+    });
   });
 
   describe('close', () => {

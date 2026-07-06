@@ -168,6 +168,20 @@ describe('UsersService', () => {
       expect(prisma.refreshToken.updateMany).toHaveBeenCalled();
       expect(res.scheduledFor).toBeInstanceOf(Date);
     });
+
+    it('si ya está PENDING_DELETION devuelve la fecha programada sin re-actualizar', async () => {
+      prisma.user.findUnique.mockResolvedValue(
+        dbUser({
+          role: UserRole.PARENT,
+          status: UserStatus.PENDING_DELETION,
+          deletionRequestedAt: new Date(),
+          passwordHash: await bcrypt.hash(pwd, 4),
+        }),
+      );
+      const res = await service.requestAccountDeletion('u1', { password: pwd }, 'ip');
+      expect(res.message).toMatch(/ya está programada/i);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('cancelAccountDeletion', () => {

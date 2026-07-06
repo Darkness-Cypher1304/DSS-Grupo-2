@@ -56,5 +56,28 @@ describe('AuditService', () => {
       expect(res).toMatchObject({ total: 10, failed: 2, successRate: 80 });
       expect(res.byAction[0]).toMatchObject({ action: 'USER_LOGIN_SUCCESS', count: 7 });
     });
+
+    it('successRate = 100 cuando no hay registros', async () => {
+      prisma.auditLog.count.mockResolvedValueOnce(0).mockResolvedValueOnce(0);
+      (prisma.auditLog.groupBy as unknown as jest.Mock).mockResolvedValue([]);
+      const res = await service.stats(USER_IDS.admin);
+      expect(res.successRate).toBe(100);
+    });
+  });
+
+  describe('findMany con filtros', () => {
+    it('aplica action/userId/success al where', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.auditLog.findMany.mockResolvedValue([] as any);
+      prisma.auditLog.count.mockResolvedValue(0);
+      await service.findMany(USER_IDS.admin, {
+        page: 1,
+        perPage: 20,
+        action: 'USER_LOGIN_SUCCESS',
+        userId: 'u1',
+        success: false,
+      });
+      expect(prisma.auditLog.findMany).toHaveBeenCalled();
+    });
   });
 });

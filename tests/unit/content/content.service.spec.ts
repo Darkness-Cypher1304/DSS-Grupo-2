@@ -32,6 +32,15 @@ describe('ContentService', () => {
       expect(res.items).toHaveLength(1);
       expect(res.pagination).toMatchObject({ total: 1, totalPages: 1 });
     });
+
+    it('filtra por categoría cuando se indica', async () => {
+      prisma.content.findMany.mockResolvedValue([]);
+      prisma.content.count.mockResolvedValue(0);
+      await service.listPublished('guias', 1, 12);
+      expect(prisma.content.findMany.mock.calls[0][0]!.where).toEqual(
+        expect.objectContaining({ category: 'guias' }),
+      );
+    });
   });
 
   describe('getBySlug', () => {
@@ -113,6 +122,15 @@ describe('ContentService', () => {
       await service.update(USER_IDS.specialist, UserRole.SPECIALIST, 'c1', { title: 'x' });
 
       expect(prisma.content.update.mock.calls[0][0].data.status).toBe(ContentStatus.PENDING);
+    });
+
+    it('un artículo NO publicado conserva su estado al editarse', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.content.findUnique.mockResolvedValue({ id: 'c1', authorId: USER_IDS.specialist, status: ContentStatus.DRAFT } as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.content.update.mockResolvedValue({} as any);
+      await service.update(USER_IDS.specialist, UserRole.SPECIALIST, 'c1', { title: 'nuevo' });
+      expect(prisma.content.update.mock.calls[0][0].data.status).toBe(ContentStatus.DRAFT);
     });
   });
 

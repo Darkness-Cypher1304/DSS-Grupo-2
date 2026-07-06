@@ -99,7 +99,6 @@ export function signAccessToken(payload: Partial<AuthUser>): string {
       issuer: process.env.JWT_ISSUER ?? 'neuroalert',
       audience: process.env.JWT_AUDIENCE ?? 'neuroalert-users',
       expiresIn: '15m',
-      subject: payload.sub,
     },
   );
 }

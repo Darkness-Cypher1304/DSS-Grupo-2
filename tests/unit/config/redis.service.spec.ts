@@ -108,5 +108,12 @@ describe('RedisService', () => {
       await service.onModuleDestroy();
       expect(client.quit).toHaveBeenCalled();
     });
+
+    it('también inicializa por REDIS_HOST (sin URL)', () => {
+      (Redis as unknown as jest.Mock).mockImplementation(() => client);
+      const byHost = new RedisService(configMock({ REDIS_HOST: 'localhost', REDIS_PORT: '6379' }));
+      byHost.onModuleInit();
+      expect(byHost.isRedis).toBe(true);
+    });
   });
 });

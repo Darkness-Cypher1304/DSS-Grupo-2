@@ -79,7 +79,6 @@ export function createCallHandler<T>(value: T): CallHandler<T> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function getParamDecoratorFactory(decorator: (...args: any[]) => ParameterDecorator) {
   class Probe {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
     test(@decorator() _value: unknown): void {}
   }
   const args = Reflect.getMetadata(ROUTE_ARGS_METADATA, Probe, 'test');
