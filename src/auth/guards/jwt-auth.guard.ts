@@ -19,7 +19,7 @@ import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 
 import { IS_PUBLIC_KEY, AuthUser } from '../../common/decorators';
-import { RedisService } from '../../config/redis.module';
+import { RedisService } from '../../config/redis.service';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
