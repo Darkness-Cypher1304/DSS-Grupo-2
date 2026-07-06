@@ -15,11 +15,13 @@ name: CI/CD Pipeline
 #                        │
 #                        ▼  (tests esperan calidad + TODA la seguridad estática)
 #            ┌──► unit-tests ──┐
-#            └──► integration-tests ──┴─► coverage-gate (85%) ─► deploy-dev*
+#            └──► integration-tests ──┴─► coverage-gate (85%) ─┐
+#                                                              ├─► deploy-dev*
+#      e2e (app real + postgres:15, corre en push Y PR) ───────┘
 #
-#   *deploy-dev solo en push a main. A partir de aquí sigue la CADENA DE DEPLOY
-#    (CD, Parte 2 — ya reestructurada):
-#      deploy-dev → Health Check + Smoke → (🔒 e2e reservado) → dast →
+#   *deploy-dev solo en push a main; necesita coverage-gate Y e2e. A partir de
+#    aquí sigue la CADENA DE DEPLOY (CD):
+#      deploy-dev → Health Check + Smoke → dast →
 #                   security-gate → deploy-prod → Production Health Check
 #
 # NOTA (modelo de ejecución de GitHub Actions): cada job corre en una VM nueva
@@ -317,13 +319,60 @@ jobs:
         run: node .github/scripts/coverage-summary.mjs
 
   # ==========================================================================
-  # DEPLOY DEV — depende exclusivamente del Coverage Gate (que ya arrastra,
-  # transitivamente, calidad + build + seguridad estática + tests). Solo en
-  # push a main. Contenido INTACTO (hook de Render + espera).
+  # E2E — app REAL contra un Postgres REAL (service container postgres:15).
+  # Self-contained: levanta su propia app + su propia BD en el runner (NO prueba
+  # la instancia desplegada). Por eso vive en la FASE CI (corre en push Y PR) y
+  # GATEA el deploy (deploy-dev depende de él). Valida migraciones, SQL real,
+  # transacciones, runWithUserContext y el aislamiento a nivel de app (404).
+  # ⚠️ RLS FORCE NO se valida aquí (la app conecta como superusuario → bypass);
+  # su efecto se verifica en Render (dueño no-superusuario). Ver tests/e2e/README.md.
+  # ==========================================================================
+  e2e:
+    name: E2E (app real + Postgres)
+    needs: coverage-gate
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/neuroalert_e2e?schema=public
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: neuroalert_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Generar Prisma Client
+        run: npx prisma generate
+      - name: Aplicar migraciones (incl. RLS) a la BD de test
+        run: npx prisma migrate deploy
+      - name: Ejecutar E2E (app real + Postgres)
+        run: npm run test:e2e
+
+  # ==========================================================================
+  # DEPLOY DEV — depende del Coverage Gate Y del E2E (ambos gates de CI, que ya
+  # arrastran calidad + build + seguridad estática + tests). Solo en push a main.
+  # Contenido INTACTO (hook de Render + espera).
   # ==========================================================================
   deploy-dev:
     name: Deploy a Desarrollo
-    needs: coverage-gate
+    needs: [coverage-gate, e2e]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
@@ -335,14 +384,12 @@ jobs:
         run: sleep 30
 
   # ==========================================================================
-  # CADENA DE DESPLIEGUE (CD) — PARTE 2 (reestructurada según la propuesta):
-  #   deploy-dev → Health Check + Smoke → (🔒 e2e reservado) → dast →
-  #                security-gate → deploy-prod → Production Health Check
-  # El E2E queda RESERVADO (if:false). Mientras no esté activo, `dast` sigue
-  # colgando de `smoke`: si `dast` dependiera de un `e2e` saltado, GitHub Actions
-  # saltaría toda la cadena. Al activar el e2e (subtarea): quitar `if:false` y
-  # cambiar `dast` a `needs: e2e`. La lógica de ZAP, Security Gate y los deploy
-  # hooks NO se tocan (contenido validado, reutilizado tal cual).
+  # CADENA DE DESPLIEGUE (CD):
+  #   deploy-dev → Health Check + Smoke → dast → security-gate →
+  #                deploy-prod → Production Health Check
+  # El E2E ya NO vive en esta cadena: es un gate de la FASE CI que bloquea
+  # deploy-dev (ver el job `e2e` arriba). La lógica de ZAP, Security Gate y los
+  # deploy hooks NO se tocan (contenido validado, reutilizado tal cual).
   # ==========================================================================
   # Health Check + Smoke Test: valida que la instancia DEV desplegada está
   # operativa Y es la versión nueva (comprueba el CONTENIDO del /health, no solo
@@ -369,19 +416,6 @@ jobs:
           done
           echo "Dev no respondió como NestJS tras los reintentos (¿build falló o sigue en curso?)"
           exit 1
-
-  # 🔒 E2E — RESERVADO (app real + postgres:15 + migraciones). Ver tests/e2e/README.md.
-  # Para activarlo: quitar `if: false` y hacer que `dast` dependa de `e2e`
-  # (needs: e2e). Aquí quedaría el servicio `postgres:15` + `prisma migrate deploy`
-  # + `npm run test:e2e`.
-  e2e:
-    name: E2E (reservado)
-    needs: smoke-test
-    if: false
-    runs-on: ubuntu-latest
-    steps:
-      - name: Placeholder
-        run: echo "E2E reservado — ver tests/e2e/README.md"
 
   dast:
     name: DAST - OWASP ZAP
