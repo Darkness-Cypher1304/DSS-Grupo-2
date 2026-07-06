@@ -18,8 +18,9 @@ name: CI/CD Pipeline
 #            └──► integration-tests ──┴─► coverage-gate (85%) ─► deploy-dev*
 #
 #   *deploy-dev solo en push a main. A partir de aquí sigue la CADENA DE DEPLOY
-#    (Parte 2, aún SIN reestructurar en este PR):
-#      deploy-dev → smoke-test → (e2e reservado) → dast → security-gate → deploy-prod
+#    (CD, Parte 2 — ya reestructurada):
+#      deploy-dev → Health Check + Smoke → (🔒 e2e reservado) → dast →
+#                   security-gate → deploy-prod → Production Health Check
 #
 # NOTA (modelo de ejecución de GitHub Actions): cada job corre en una VM nueva
 # y aislada; NO existe un job "setup" reutilizable (su entorno no persiste entre
@@ -334,14 +335,20 @@ jobs:
         run: sleep 30
 
   # ==========================================================================
-  # CADENA DE DESPLIEGUE — PARTE 2 (aún SIN reestructurar en este PR).
-  # Se mantiene INTACTA para no romper el pipeline; se reorganizará en el
-  # siguiente PR (Health Check + Smoke → E2E → DAST → Security Gate →
-  # Deploy PROD → Production Health Check), según la propuesta.
-  #   deploy-dev → smoke-test → (🔒 e2e reservado) → dast → security-gate → deploy-prod
+  # CADENA DE DESPLIEGUE (CD) — PARTE 2 (reestructurada según la propuesta):
+  #   deploy-dev → Health Check + Smoke → (🔒 e2e reservado) → dast →
+  #                security-gate → deploy-prod → Production Health Check
+  # El E2E queda RESERVADO (if:false). Mientras no esté activo, `dast` sigue
+  # colgando de `smoke`: si `dast` dependiera de un `e2e` saltado, GitHub Actions
+  # saltaría toda la cadena. Al activar el e2e (subtarea): quitar `if:false` y
+  # cambiar `dast` a `needs: e2e`. La lógica de ZAP, Security Gate y los deploy
+  # hooks NO se tocan (contenido validado, reutilizado tal cual).
   # ==========================================================================
+  # Health Check + Smoke Test: valida que la instancia DEV desplegada está
+  # operativa Y es la versión nueva (comprueba el CONTENIDO del /health, no solo
+  # HTTP 200). Contenido reutilizado verbatim; solo se clarifica el nombre.
   smoke-test:
-    name: Smoke Test en Dev
+    name: Health Check + Smoke Test en Dev
     needs: deploy-dev
     runs-on: ubuntu-latest
     steps:
@@ -462,4 +469,32 @@ jobs:
         run: |
           curl -X POST ${{ secrets.RENDER_PROD_HOOK }}
           echo "Deploy a Producción disparado"
+
+  # ==========================================================================
+  # PRODUCTION HEALTH CHECK — validación FINAL del pipeline. Que Render complete
+  # el deploy no garantiza que la app arranque; este job confirma que la versión
+  # en PROD quedó realmente operativa. Reutiliza el patrón del smoke de Dev
+  # (valida el CONTENIDO del /health), contra la URL de PRODUCCIÓN.
+  # ==========================================================================
+  production-health-check:
+    name: Production Health Check
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que Prod responde Y es el backend NestJS
+        run: |
+          # Igual criterio que el smoke de Dev: valida el CONTENIDO (no solo
+          # HTTP 200) del /health de PRODUCCIÓN (miapp-6ex5, NO miapp). Se da
+          # margen al build/arranque de Render.
+          for i in $(seq 1 18); do
+            BODY=$(curl -s --max-time 15 https://miapp-6ex5.onrender.com/health || true)
+            if echo "$BODY" | grep -q '"checks"'; then
+              echo "Prod OK (NestJS): $BODY"
+              exit 0
+            fi
+            echo "Intento $i: aún no responde el NestJS en prod (body: $(echo "$BODY" | head -c 80))…"
+            sleep 20
+          done
+          echo "Prod no respondió como NestJS tras los reintentos (¿deploy falló o sigue en curso?)"
+          exit 1
 ###
