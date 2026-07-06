@@ -43,7 +43,7 @@ export async function registerAndVerify(
 ): Promise<{ email: string; userId: string }> {
   const http = request(app.getHttpServer());
   const email = opts.email ?? uniqueEmail();
-  const fullName = opts.fullName ?? 'Padre E2E Test'; // solo letras/espacios (regex del DTO)
+  const fullName = opts.fullName ?? 'Padre Prueba'; // solo letras/espacios (el regex del DTO prohíbe dígitos)
 
   const reg = await http
     .post('/api/auth/register')
