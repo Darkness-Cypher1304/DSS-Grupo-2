@@ -1,0 +1,6 @@
+{
+  "$schema": "Excepciones documentadas para el gate de npm audit (audit-gate.mjs).",
+  "$doc": "Cada excepción se AUTORIZA aquí de forma explícita. Se bloquea el pipeline ante cualquier vulnerabilidad de severidad >= umbral (high) en dependencias de PRODUCCIÓN que no figure aquí, o cuya 'expires' ya pasó. Añadir solo con evidencia (ver docs/SECURITY-DEPENDENCIES.md) y caducidad para forzar la re-evaluación.",
+  "$fields": "id (GHSA), package, reason, owner, expires (YYYY-MM-DD)",
+  "exceptions": []
+}
