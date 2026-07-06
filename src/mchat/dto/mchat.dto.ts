@@ -2,8 +2,7 @@
 // DTOs de M-CHAT-R
 // ============================================================================
 
-import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 import { IsMchatResponses } from './mchat-responses.validator';

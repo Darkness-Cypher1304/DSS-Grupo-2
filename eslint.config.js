@@ -27,7 +27,13 @@ module.exports = [
     rules: {
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/explicit-function-return-type': 'off',
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      // `ignoreRestSiblings`: permite el patrón intencional de omitir campos
+      // sensibles vía rest (`const { passwordHash, ...safe } = user; return safe;`)
+      // en users.service.ts sin marcar los descartados como no usados.
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
     },
   },
 ];

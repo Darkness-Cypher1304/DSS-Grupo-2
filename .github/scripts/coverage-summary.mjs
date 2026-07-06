@@ -58,10 +58,16 @@ if (!summaryCombined) {
 // ---------------------------------------------------------------------------
 const total = summaryCombined.total;
 const passed = METRICS.every((m) => total[m].pct >= GATE);
+// % combinada = cobertura conjunta de las 4 métricas globales (Σcubierto / Σtotal).
+const overallCovered = METRICS.reduce((a, m) => a + total[m].covered, 0);
+const overallTotal = METRICS.reduce((a, m) => a + total[m].total, 0);
+const overallPct = pct(overallCovered, overallTotal);
 
 write(`## 🎯 Coverage Gate (mínimo ${GATE}%)`);
 write('');
-write(`**Coverage Gate (${GATE}%): ${passed ? 'PASSED ✅' : 'FAILED ❌'}**`);
+write(
+  `**Coverage Gate (${GATE}%): ${passed ? 'PASSED ✅' : 'FAILED ❌'} — ${overallPct}% combinada / ${total.branches.pct}% branches**`,
+);
 write('');
 
 // ---------------------------------------------------------------------------
@@ -273,8 +279,10 @@ if (finalCombined && summaryCombined) {
 // ---------------------------------------------------------------------------
 {
   const buckets = { '100%': 0, '90–99%': 0, '80–89%': 0, '<80%': 0 };
+  let fileCount = 0;
   for (const [k, v] of Object.entries(summaryCombined)) {
     if (k === 'total') continue;
+    fileCount++;
     const p = v.lines.pct;
     if (p >= 100) buckets['100%']++;
     else if (p >= 90) buckets['90–99%']++;
@@ -283,9 +291,11 @@ if (finalCombined && summaryCombined) {
   }
   write('### 📊 Distribución (cobertura de líneas por archivo)');
   write('');
-  write('| Rango | Archivos |');
-  write('|---|---:|');
-  for (const [k, v] of Object.entries(buckets)) write(`| ${k} | ${v} |`);
+  write('| 100% | 90–99% | 80–89% | <80% | Total archivos |');
+  write('|:--:|:--:|:--:|:--:|:--:|');
+  write(
+    `| ${buckets['100%']} | ${buckets['90–99%']} | ${buckets['80–89%']} | ${buckets['<80%']} | ${fileCount} |`,
+  );
   write('');
 }
 

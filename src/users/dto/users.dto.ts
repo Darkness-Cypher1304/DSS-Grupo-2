@@ -4,7 +4,7 @@
 
 import { IsEnum, IsOptional, IsString, MaxLength, MinLength, IsInt, Min, Max, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { UserStatus, SpecialistVerificationStatus } from '@prisma/client';
+import { UserStatus } from '@prisma/client';
 
 // ----------------------------------------------------------------------------
 // Actualizar perfil propio

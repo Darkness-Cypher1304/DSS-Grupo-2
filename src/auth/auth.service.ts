@@ -14,7 +14,6 @@
 import {
   Injectable,
   UnauthorizedException,
-  ConflictException,
   BadRequestException,
   Logger,
   NotFoundException,
