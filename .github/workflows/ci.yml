@@ -1,28 +1,46 @@
 name: CI/CD Pipeline
 
 # ============================================================================
-# ARQUITECTURA (reestructuración — propuesta oficial NeuroAlert)
+# ARQUITECTURA (versión final — NeuroAlert backend)
 # ----------------------------------------------------------------------------
-# Flujo objetivo (fail-fast + DevSecOps + pirámide de testing):
+# Organizada por OBJETIVO (fail-fast + DevSecOps + pirámide de testing). Las
+# etapas se leen de arriba hacia abajo en orden de ejecución; los prefijos de
+# nombre agrupan visualmente cada responsabilidad (GitHub Actions no tiene
+# "stages" nativos, así que la agrupación se expresa con nombres + `needs`).
 #
-#   push/PR ─┬─► Code Quality & Build (type-check · lint · build)
-#            └─► Static Security (SAST) & Supply Chain  [jobs en paralelo]
-#                  · codeql            (SAST semántico, matriz)
-#                  · eslint-security   (SAST de patrones, BLOQUEANTE)
-#                  · bandit            (SAST Python, CUMPLIMIENTO — no bloquea)
-#                  · supply-chain      (Trivy + SBOM, report-only)
-#                  · dependency-scan   (npm audit gate, BLOQUEANTE)
-#                        │
-#                        ▼  (tests esperan calidad + TODA la seguridad estática)
-#            ┌──► unit-tests ──┐
-#            └──► integration-tests ──┴─► coverage-gate (85%) ─┐
-#                                                              ├─► deploy-dev*
-#      e2e (app real + postgres:15, corre en push Y PR) ───────┘
+#   ═══════════════ FASE CI (push Y pull_request) ═══════════════
+#   Etapa 1 · CALIDAD & BUILD
+#     └─ Calidad · Code Quality & Build   (type-check · lint · nest build)
+#                     │
+#        ┌────────────┴───────────────────────────┐
+#        ▼                                         ▼
+#   Etapa 2 · SAST (código propio)          Etapa 3 · SCA (dependencias)
+#     ├─ SAST · CodeQL (JS/TS)  [security-extended]   ├─ SCA · Supply Chain (Trivy+SBOM)  [report-only]
+#     └─ Seguridad CI · CodeQL (Actions)              └─ SCA · Dependency Audit Gate (npm)  [BLOQUEANTE]
+#        └────────────┬───────────────────────────┘
+#                     ▼  (tests esperan calidad + TODA la seguridad estática)
+#   Etapa 4 · PRUEBAS
+#     ├─ Unit Tests  ∥  Integration Tests   (contenido intacto)
+#     └────────┬────────┘
+#              ▼
+#        Coverage Gate 85%                   (contenido intacto)
 #
-#   *deploy-dev solo en push a main; necesita coverage-gate Y e2e. A partir de
-#    aquí sigue la CADENA DE DEPLOY (CD):
-#      deploy-dev → Health Check + Smoke → dast →
-#                   security-gate → deploy-prod → Production Health Check
+#   ═══════════════ FASE CD (solo push a main) ═══════════════
+#              ▼
+#        Deploy a Desarrollo                 (needs: coverage-gate)
+#              ▼
+#        Health Check + Smoke Test (Dev)     (verificación reforzada de /health)
+#              ▼
+#        ┌───────────────────────────┐
+#        ▼                           ▼
+#   DAST (OWASP ZAP)         E2E (fundacional)   ← en paralelo (ahorro de tiempo)
+#        └───────────┬───────────────┘
+#                    ▼
+#   Security Gate · Reporte DAST (ZAP)   (needs: dast, e2e)
+#                    ▼
+#        Deploy a Producción
+#                    ▼
+#        Production Health Check          (paridad con el Health Check de Dev)
 #
 # NOTA (modelo de ejecución de GitHub Actions): cada job corre en una VM nueva
 # y aislada; NO existe un job "setup" reutilizable (su entorno no persiste entre
@@ -45,14 +63,17 @@ permissions:
 
 jobs:
   # ==========================================================================
-  # CODE QUALITY & BUILD — primera barrera técnica (fail-fast).
+  # ETAPA 1 · CALIDAD & BUILD — primera barrera técnica (fail-fast).
   # Fusiona el antiguo `quality` (type-check + lint) con el `build`, que antes
   # corría DESPUÉS de los tests. Se adelanta a esta etapa: no tiene sentido
   # testear/desplegar si el proyecto ni compila. El `nest build` es idéntico;
   # solo cambia de posición.
+  #   · type-check (tsc --noEmit): seguridad de tipos de `src/` (fail-fast barato).
+  #   · lint (eslint calidad): estilo/calidad + corrección (no-unused-vars, etc.).
+  #   · build (nest build → tsc): compila y, de paso, revalida tipos del emit.
   # ==========================================================================
   code-quality-build:
-    name: Code Quality & Build (type-check + lint + build)
+    name: Calidad · Code Quality & Build (type-check + lint + build)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout código
@@ -74,16 +95,19 @@ jobs:
         run: npm run build
 
   # ==========================================================================
-  # STATIC SECURITY (SAST) & SUPPLY CHAIN — grupo de jobs en PARALELO.
-  # Se implementa como jobs separados (no un único job) para respetar la
-  # responsabilidad única y porque CodeQL usa matriz/permisos propios.
-  # Como CONJUNTO, gatea las pruebas: nada se testea si la seguridad estática
-  # bloqueante no pasa (shift-left security).
+  # ETAPA 2 · SAST (seguridad del CÓDIGO propio) + Seguridad de CI.
+  # CodeQL es el SAST semántico de referencia (dataflow/taint tracking) y sube
+  # sus hallazgos a GitHub Security → Code scanning (los "reportes en GitHub").
+  # La matriz cubre DOS objetivos distintos con la misma acción:
+  #   · javascript-typescript → SAST del código de la app (src/). Suite ampliado
+  #     a `security-extended` para más cobertura de queries de seguridad.
+  #   · actions               → analiza los propios workflows (.github/workflows)
+  #     en busca de vulnerabilidades de la PIPELINE (script injection, etc.).
+  # Coexiste con ESLint-security (SAST sintáctico de feedback rápido): jobs
+  # separados, complementarios; no compiten.
   # ==========================================================================
-
-  # SAST semántico (matriz). Sube resultados a GitHub Security.
   codeql:
-    name: CodeQL (${{ matrix.language }})
+    name: ${{ matrix.display }}
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -93,7 +117,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [javascript-typescript, actions]
+        include:
+          - language: javascript-typescript
+            display: 'SAST · CodeQL (JavaScript/TypeScript)'
+            queries: security-extended
+          - language: actions
+            display: 'Seguridad CI · CodeQL (Actions)'
+            queries: ''
     steps:
       - name: Checkout código
         uses: actions/checkout@v5
@@ -103,6 +133,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          queries: ${{ matrix.queries }}
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
@@ -111,9 +142,10 @@ jobs:
 
   # SAST de patrones inseguros (eslint-plugin-security). BLOQUEANTE (--max-warnings 0).
   # Config SEPARADA (eslint.security.config.js) de la de calidad: distinta
-  # responsabilidad. Coexiste con CodeQL (complementarios, no compiten).
+  # responsabilidad. Complementa a CodeQL con feedback rápido a velocidad de lint
+  # (recomendación del curso: iniciar el SAST con eslint-security + CodeQL).
   eslint-security:
-    name: SAST - ESLint Security
+    name: SAST · ESLint Security
     runs-on: ubuntu-latest
     steps:
       - name: Checkout código
@@ -128,43 +160,17 @@ jobs:
       - name: ESLint Security (bloqueante)
         run: npm run lint:security
 
-  # SAST de Python (Bandit). El backend es NestJS/TypeScript: NO hay código
-  # Python propio, por lo que Bandit no encuentra nada que analizar. Se incluye
-  # por requisito del curso como control de CUMPLIMIENTO, de forma transparente
-  # y NO BLOQUEANTE (continue-on-error). El SAST efectivo de JS/TS lo cubren
-  # eslint-security y CodeQL.
-  bandit:
-    name: SAST - Bandit (cumplimiento, no bloqueante)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v5
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Instalar Bandit
-        run: pip install bandit
-      - name: Ejecutar Bandit sobre src/ (SAST Python)
-        run: |
-          {
-            echo "## 🐍 Bandit (SAST Python) — control de cumplimiento"
-            echo ""
-            echo "El backend es NestJS/TypeScript: **no contiene código Python propio**."
-            echo "Bandit se ejecuta por requisito del curso; el SAST efectivo de JS/TS"
-            echo "lo cubren **ESLint Security** y **CodeQL**. No bloquea el pipeline."
-            echo ""
-            echo '```'
-            bandit -r src -f screen 2>&1 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+  # ==========================================================================
+  # ETAPA 3 · SCA (seguridad de DEPENDENCIAS / cadena de suministro).
+  # Distinta de la Etapa 2: aquí NO se analiza el código propio sino el árbol de
+  # dependencias (node_modules / lockfile).
+  # ==========================================================================
 
   # Supply chain: Trivy (vulnerabilidades del árbol) + SBOM CycloneDX. Report-only.
   # ⏳ A FUTURO: evaluar volver Trivy bloqueante (hoy exit-code 0 por decisión
   # validada durante el desarrollo; convertirlo en gate es otra decisión).
   supply-chain:
-    name: Supply Chain - Trivy + SBOM
+    name: SCA · Supply Chain (Trivy + SBOM)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -208,7 +214,7 @@ jobs:
   # en dependencias de producción salvo excepción documentada y vigente en
   # .github/audit-allowlist.json (ver docs/SECURITY-DEPENDENCIES.md).
   dependency-scan:
-    name: Dependency Scan (npm audit)
+    name: SCA · Dependency Audit Gate (npm audit)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout código
@@ -227,15 +233,16 @@ jobs:
           node .github/scripts/audit-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ==========================================================================
+  # ETAPA 4 · PRUEBAS.
   # UNIT ∥ INTEGRATION — jobs SEPARADOS y en PARALELO (pirámide de testing).
   # Esperan a Code Quality & Build Y a TODA la etapa de seguridad estática
   # (no se testea si la seguridad bloqueante falló). Ninguno necesita Postgres:
   # la integración mockea Prisma (análogo a MSW en el frontend). La DB real
-  # queda para el e2e (reservado, Parte 2).
+  # queda para el e2e (fase CD).
   # ==========================================================================
   unit-tests:
     name: Unit Tests
-    needs: [code-quality-build, codeql, eslint-security, bandit, supply-chain, dependency-scan]
+    needs: [code-quality-build, codeql, eslint-security, supply-chain, dependency-scan]
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -259,7 +266,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests
-    needs: [code-quality-build, codeql, eslint-security, bandit, supply-chain, dependency-scan]
+    needs: [code-quality-build, codeql, eslint-security, supply-chain, dependency-scan]
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -319,17 +326,86 @@ jobs:
         run: node .github/scripts/coverage-summary.mjs
 
   # ==========================================================================
-  # E2E — app REAL contra un Postgres REAL (service container postgres:15).
-  # Self-contained: levanta su propia app + su propia BD en el runner (NO prueba
-  # la instancia desplegada). Por eso vive en la FASE CI (corre en push Y PR) y
-  # GATEA el deploy (deploy-dev depende de él). Valida migraciones, SQL real,
-  # transacciones, runWithUserContext y el aislamiento a nivel de app (404).
+  # FASE CD — solo en push a main (deploy-dev tiene `if: main`; el resto de la
+  # cadena hereda esa condición por `needs`, así que en pull_request se salta).
+  # ==========================================================================
+
+  # DEPLOY DEV — depende SOLO del Coverage Gate (que ya arrastra calidad + build
+  # + seguridad estática + tests). Inmediatamente después del gate. Contenido
+  # INTACTO (hook de Render + espera).
+  deploy-dev:
+    name: Deploy a Desarrollo
+    needs: [coverage-gate]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy a Dev (Render)
+        run: |
+          curl -X POST ${{ secrets.RENDER_DEV_HOOK }}
+          echo "Deploy a Dev disparado"
+      - name: Esperar que Render inicie
+        run: sleep 30
+
+  # ==========================================================================
+  # HEALTH CHECK + SMOKE TEST (Dev) — valida que la instancia DEV desplegada
+  # quedó operativa Y es la versión nueva. Reforzado (script compartido
+  # health-check.sh): además de "responde y es el NestJS", verifica HTTP 200,
+  # parsea el JSON con jq, exige checks.database == true (GATE DURO), reporta
+  # checks.cache (Redis opcional, tolerante) y las cabeceras de seguridad
+  # (Helmet). Read-only. Ver .github/scripts/health-check.sh.
+  # ==========================================================================
+  smoke-test:
+    name: Health Check + Smoke Test en Dev
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Health Check + Smoke Test reforzado (Dev)
+        run: bash .github/scripts/health-check.sh https://miapp-dev.onrender.com "Dev"
+
+  # ==========================================================================
+  # DAST — OWASP ZAP contra la instancia DEV desplegada. Corre en PARALELO con
+  # el e2e (ambos dependen del smoke) para ahorrar tiempo de pared. Contenido
+  # INTACTO.
+  # ==========================================================================
+  dast:
+    name: DAST - OWASP ZAP
+    needs: smoke-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+
+      - name: Ejecutar OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: 'https://miapp-dev.onrender.com'
+          rules_file_name: '.zap/rules.tsv'
+          fail_action: false
+          allow_issue_writing: false
+          artifact_name: 'zap-baseline-report'
+
+  # ==========================================================================
+  # E2E (fundacional) — app REAL contra un Postgres REAL EFÍMERO (service
+  # container postgres:15). Self-contained: levanta su propia app + su propia BD
+  # en el runner y la destruye al terminar → NO toca la BD de dev/prod, cero
+  # riesgo de romper datos o la demo. Corre en paralelo con el DAST.
+  #
+  # ⚠️ NOTA HONESTA (en construcción): este job NO representa aún la
+  # implementación IDEAL de un e2e post-deploy. Es una BASE fundacional (flujos
+  # críticos health/auth/M-CHAT vía supertest) pensada para hacer CRECER el e2e;
+  # su objetivo futuro es un e2e completo contra el entorno desplegado. Por ahora
+  # valida migraciones, SQL real, transacciones, runWithUserContext y el
+  # aislamiento por usuario a nivel de app (IDOR → 404), de forma AISLADA y segura.
   # ⚠️ RLS FORCE NO se valida aquí (la app conecta como superusuario → bypass);
   # su efecto se verifica en Render (dueño no-superusuario). Ver tests/e2e/README.md.
+  # Contenido de los tests: INTACTO.
   # ==========================================================================
   e2e:
-    name: E2E (app real + Postgres)
-    needs: coverage-gate
+    name: E2E (fundacional · app real + Postgres efímero)
+    needs: smoke-test
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -366,78 +442,15 @@ jobs:
         run: npm run test:e2e
 
   # ==========================================================================
-  # DEPLOY DEV — depende del Coverage Gate Y del E2E (ambos gates de CI, que ya
-  # arrastran calidad + build + seguridad estática + tests). Solo en push a main.
-  # Contenido INTACTO (hook de Render + espera).
+  # SECURITY GATE · Reporte DAST (ZAP) — evalúa el reporte del ZAP contra la
+  # política de seguridad. Convergen aquí el DAST y el e2e: ambos deben pasar
+  # para promover a producción. Contenido de la política: INTACTO.
+  # Falla con blacklist (40018 SQLi, 40012 XSS reflejado, 40014 XSS almacenado,
+  # 10202 CSRF), o HIGH > 0, o MEDIUM >= 5.
   # ==========================================================================
-  deploy-dev:
-    name: Deploy a Desarrollo
-    needs: [coverage-gate, e2e]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Deploy a Dev (Render)
-        run: |
-          curl -X POST ${{ secrets.RENDER_DEV_HOOK }}
-          echo "Deploy a Dev disparado"
-      - name: Esperar que Render inicie
-        run: sleep 30
-
-  # ==========================================================================
-  # CADENA DE DESPLIEGUE (CD):
-  #   deploy-dev → Health Check + Smoke → dast → security-gate →
-  #                deploy-prod → Production Health Check
-  # El E2E ya NO vive en esta cadena: es un gate de la FASE CI que bloquea
-  # deploy-dev (ver el job `e2e` arriba). La lógica de ZAP, Security Gate y los
-  # deploy hooks NO se tocan (contenido validado, reutilizado tal cual).
-  # ==========================================================================
-  # Health Check + Smoke Test: valida que la instancia DEV desplegada está
-  # operativa Y es la versión nueva (comprueba el CONTENIDO del /health, no solo
-  # HTTP 200). Contenido reutilizado verbatim; solo se clarifica el nombre.
-  smoke-test:
-    name: Health Check + Smoke Test en Dev
-    needs: deploy-dev
-    runs-on: ubuntu-latest
-    steps:
-      - name: Verificar que Dev responde Y es el backend NestJS
-        run: |
-          # Verifica el CONTENIDO, no solo HTTP 200: el NestJS responde
-          # {"data":{...,"checks":{...}}}; la app anterior daba {"status":"healthy"}.
-          # Así evitamos el falso positivo de que la versión vieja siga sirviendo
-          # mientras un build nuevo falla. Damos margen al primer build de Docker.
-          for i in $(seq 1 18); do
-            BODY=$(curl -s --max-time 15 https://miapp-dev.onrender.com/health || true)
-            if echo "$BODY" | grep -q '"checks"'; then
-              echo "Dev OK (NestJS): $BODY"
-              exit 0
-            fi
-            echo "Intento $i: aún no responde el NestJS (body: $(echo "$BODY" | head -c 80))…"
-            sleep 20
-          done
-          echo "Dev no respondió como NestJS tras los reintentos (¿build falló o sigue en curso?)"
-          exit 1
-
-  dast:
-    name: DAST - OWASP ZAP
-    needs: smoke-test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v5
-
-      - name: Ejecutar OWASP ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.14.0
-        with:
-          target: 'https://miapp-dev.onrender.com'
-          rules_file_name: '.zap/rules.tsv'
-          fail_action: false
-          allow_issue_writing: false
-          artifact_name: 'zap-baseline-report'
-
   security-gate:
-    name: Security Gate
-    needs: dast
+    name: Security Gate · Reporte DAST (ZAP)
+    needs: [dast, e2e]
     runs-on: ubuntu-latest
 
     steps:
@@ -446,7 +459,7 @@ jobs:
         with:
           name: zap-baseline-report
 
-      - name: Evaluar política de seguridad
+      - name: Evaluar reporte DAST (ZAP) contra la política
         run: |
           python3 << 'EOF'
           import json
@@ -505,30 +518,19 @@ jobs:
           echo "Deploy a Producción disparado"
 
   # ==========================================================================
-  # PRODUCTION HEALTH CHECK — validación FINAL del pipeline. Que Render complete
-  # el deploy no garantiza que la app arranque; este job confirma que la versión
-  # en PROD quedó realmente operativa. Reutiliza el patrón del smoke de Dev
-  # (valida el CONTENIDO del /health), contra la URL de PRODUCCIÓN.
+  # PRODUCTION HEALTH CHECK — validación FINAL del pipeline, en PARIDAD con el
+  # Health Check de Dev (mismo script compartido, misma robustez, contra la URL
+  # de PRODUCCIÓN miapp-6ex5). Que Render complete el deploy no garantiza que la
+  # app arranque: este job confirma HTTP 200 + checks.database (GATE DURO) +
+  # cabeceras de seguridad. Estrictamente read-only. Ver health-check.sh.
   # ==========================================================================
   production-health-check:
     name: Production Health Check
     needs: deploy-prod
     runs-on: ubuntu-latest
     steps:
-      - name: Verificar que Prod responde Y es el backend NestJS
-        run: |
-          # Igual criterio que el smoke de Dev: valida el CONTENIDO (no solo
-          # HTTP 200) del /health de PRODUCCIÓN (miapp-6ex5, NO miapp). Se da
-          # margen al build/arranque de Render.
-          for i in $(seq 1 18); do
-            BODY=$(curl -s --max-time 15 https://miapp-6ex5.onrender.com/health || true)
-            if echo "$BODY" | grep -q '"checks"'; then
-              echo "Prod OK (NestJS): $BODY"
-              exit 0
-            fi
-            echo "Intento $i: aún no responde el NestJS en prod (body: $(echo "$BODY" | head -c 80))…"
-            sleep 20
-          done
-          echo "Prod no respondió como NestJS tras los reintentos (¿deploy falló o sigue en curso?)"
-          exit 1
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Health Check reforzado (Producción)
+        run: bash .github/scripts/health-check.sh https://miapp-6ex5.onrender.com "Producción"
 ###
