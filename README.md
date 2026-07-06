@@ -22,7 +22,8 @@ desplegado en **Render** vía Docker, con pipeline **CI/CD** en GitHub Actions.
 - Correo: **Brevo** (API HTTP en producción) · Nodemailer/Resend (fallback)
 - Documentación de API: **Swagger / OpenAPI** (solo en desarrollo)
 - Docker (multi-stage) · GitHub Actions · Render
-- Calidad/seguridad: **Jest** · **CodeQL** (SAST) · **OWASP ZAP** (DAST) · **Trivy + SBOM**
+- Testing: **Jest** · **ts-jest** · **Supertest** · **jest-mock-extended** (unit + integración con Prisma mockeado)
+- Calidad/seguridad CI: **type-check + lint** · **Coverage Gate 85%** · **CodeQL** (SAST) · **OWASP ZAP** (DAST) · **Trivy + SBOM**
 
 ---
 
@@ -45,6 +46,11 @@ src/
   config/          RedisService (opcional; degrada a memoria)
   common/          Decorators, filtros, interceptores transversales
   main.ts          Entrypoint: defensas globales (Helmet, CORS, pipes, etc.)
+tests/             Pruebas (carpeta HERMANA de src/, ver "Testing")
+  unit/            Unidades aisladas (Prisma/Mail/Redis mockeados)
+  integration/     Nest testing + Supertest, Prisma mockeado (sin DB real)
+  e2e/             Reservado (app real + Postgres + migraciones)
+  mocks/ fixtures/ helpers/ setup/   Utilidades de test reutilizables
 prisma/
   schema.prisma    Modelo de datos (14 modelos)
   migrations/      Migraciones (incluye políticas RLS)
@@ -114,26 +120,63 @@ por defecto o habilita funcionalidades concretas (correo, Redis, cron de bajas).
 | `npm run start:dev` | API en desarrollo (watch) |
 | `npm run build` / `npm run start:prod` | Compilar y ejecutar en producción |
 | `npm run lint` · `npm run type-check` · `npm run format` | Calidad de código |
-| `npm test` · `npm run test:cov` | Pruebas (Jest) y cobertura |
+| `npm test` · `npm run test:unit` · `npm run test:integration` | Pruebas (Jest): todas / unit / integración |
+| `npm run test:coverage` | Cobertura + Coverage Gate 85% (falla si no se cumple) |
 | `npm run prisma:generate` · `prisma:migrate` · `prisma:studio` · `prisma:seed` | Prisma / BD |
 | `npm run audit` | Auditoría de dependencias (`npm audit`) |
 
 ---
 
+## Testing
+
+Las pruebas viven en **`tests/`** (carpeta **hermana** de `src/`, no anidada),
+siguiendo la pirámide de testing:
+
+- **`tests/unit/`** — unidades aisladas (services, guards, strategy, pipes,
+  interceptores, filtro, decoradores, scoring del M-CHAT, `RedisService`…), con
+  **Prisma, Mail y Redis mockeados** (`jest-mock-extended`). Sin DB ni HTTP.
+- **`tests/integration/`** — la app NestJS **real** con los mismos globales que
+  `main.ts` (ValidationPipe, ClassSerializerInterceptor, guard global, filtro),
+  ejercitada con **Supertest** y **Prisma mockeado** (sin base de datos real).
+  Es el equivalente del enfoque MSW del frontend: se mockea la frontera (Prisma).
+- **`tests/e2e/`** — **reservado** (app completa + **Postgres real** + migraciones,
+  donde vive RLS). Ver [`tests/e2e/README.md`](./tests/e2e/README.md).
+
+**Coverage Gate:** `npm run test:coverage` aplica el umbral del **85% en las 4
+métricas** (statements/branches/functions/lines) sobre la suite **combinada**
+(`coverageThreshold` de Jest → **falla** si no se cumple). La configuración de
+Jest está en [`jest.config.js`](./jest.config.js); el entorno de test en
+`tests/setup/`.
+
+```bash
+npm run test:unit          # solo unit
+npm run test:integration   # solo integración
+npm run test:coverage      # combinada + gate 85%
+```
+
+Las exclusiones de cobertura son mínimas y justificadas (glue sin lógica):
+`*.module.ts`, `main.ts` y `*.d.ts`. **No** se excluyen DTOs con `@Transform`,
+los decoradores, el scoring ni `redis.service.ts` (tienen comportamiento propio).
+
 ## CI/CD (`.github/workflows/ci.yml`)
 
 En cada `push`/`pull_request` a `main`:
 
-1. **test** — instala dependencias, aplica migraciones a una BD de prueba, corre
-   Jest con cobertura (subida a Codecov) y `npm audit`.
-2. **codeql** — análisis estático de seguridad (SAST), en paralelo.
-3. **supply-chain** — **Trivy** (vulnerabilidades) + **SBOM** CycloneDX, en paralelo.
-4. **deploy-dev** — despliega a Desarrollo en Render (solo en `main`).
-5. **smoke-test** — verifica que `/health` responda como el backend NestJS.
-6. **dast** — escaneo dinámico **OWASP ZAP** contra el ambiente de Desarrollo.
-7. **security-gate** — evalúa el reporte de ZAP y bloquea el deploy si hay
-   vulnerabilidades HIGH o de la lista crítica (SQLi/XSS/CSRF).
-8. **deploy-prod** — si todo lo anterior pasa, despliega a Producción.
+1. **quality** — `type-check` (tsc) + `lint` (ESLint).
+2. **unit-tests ∥ integration-tests** — jobs **separados y en paralelo**; publican
+   su resumen (suites/tests/duración) en `$GITHUB_STEP_SUMMARY`. Ninguno necesita
+   Postgres (la integración mockea Prisma).
+3. **coverage-gate** — corre la suite **combinada** con cobertura y aplica el
+   **85% en las 4 métricas** (falla el job si no se cumple). Publica un **reporte
+   multivista** (global, por tipo con huella + % Total, *patch coverage*, focos,
+   distribución, detalle por archivo, glosario). **Sin Codecov.**
+4. **codeql** (SAST) ∥ **supply-chain** (Trivy + SBOM) ∥ **dependency-scan**
+   (`npm audit --omit=dev`) — en paralelo.
+5. **build** — compila (`nest build`).
+6. **deploy-dev → smoke-test → (🔒 e2e reservado) → dast (ZAP) → security-gate →
+   deploy-prod** — cadena de despliegue a Render (dev→prod). El **security-gate**
+   bloquea el deploy si ZAP reporta HIGH o vulnerabilidades de la lista crítica
+   (SQLi/XSS/CSRF).
 
 Además, un workflow **programado** (`lifecycle-cron.yml`) invoca a diario el
 endpoint que procesa las bajas de cuentas vencidas (inerte si no está configurado).

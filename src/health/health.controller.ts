@@ -10,7 +10,7 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
 import { Public } from '../common/decorators';
 import { PrismaService } from '../prisma/prisma.service';
-import { RedisService } from '../config/redis.module';
+import { RedisService } from '../config/redis.service';
 
 @ApiTags('Health')
 @Controller('health')

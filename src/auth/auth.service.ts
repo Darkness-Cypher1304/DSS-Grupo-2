@@ -26,7 +26,7 @@ import { createHash, randomBytes, randomUUID } from 'crypto';
 import { User, UserRole, UserStatus, ApplicationStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { RedisService } from '../config/redis.module';
+import { RedisService } from '../config/redis.service';
 import { MailService } from '../mail/mail.service';
 import { AuditService } from '../audit/audit.service';
 import {

@@ -14,28 +14,39 @@ permissions:
   security-events: write
 
 jobs:
-  test:
-    name: Tests + Análisis de Seguridad
+  # ==========================================================================
+  # QUALITY — Type Check + Lint (el CI antes NO compilaba TS ni linteaba)
+  # ==========================================================================
+  quality:
+    name: Quality (type-check + lint)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: test_user
-          POSTGRES_PASSWORD: test_pass
-          POSTGRES_DB: test_db
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Generar Prisma Client (tipos para tsc/eslint)
+        run: npx prisma generate
+      - name: Type Check
+        run: npm run type-check
+      - name: Lint
+        run: npm run lint
+
+  # ==========================================================================
+  # UNIT ∥ INTEGRATION — jobs SEPARADOS y en PARALELO (feedback rápido).
+  # Ninguno necesita Postgres: la integración mockea Prisma (como MSW en el
+  # frontend). El servicio de base de datos queda para el e2e (reservado).
+  # ==========================================================================
+  unit-tests:
+    name: Unit Tests
+    needs: quality
+    runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
-      # NestJS exige estos secrets para firmar JWT al inicializar (valores de prueba)
-      JWT_ACCESS_SECRET: test_access_secret_minimo_32_chars_aaaaaaaaaaaa
-      JWT_REFRESH_SECRET: test_refresh_secret_minimo_32_chars_bbbbbbbbbbbb
       NODE_ENV: test
     steps:
       - name: Checkout código
@@ -47,24 +58,78 @@ jobs:
           cache: 'npm'
       - name: Instalar dependencias
         run: npm ci
-      - name: Generar Prisma Client + aplicar migraciones
-        run: |
-          npx prisma generate
-          npx prisma migrate deploy
-      - name: Ejecutar tests (Jest) + cobertura
-        run: npm run test:cov -- --ci --passWithNoTests
-      - name: Subir cobertura a Codecov
-        uses: codecov/codecov-action@v5
-        continue-on-error: true
+      - name: Generar Prisma Client
+        run: npx prisma generate
+      - name: Ejecutar Unit Tests
+        run: mkdir -p tests/reports && npx jest tests/unit --ci --json --outputFile=tests/reports/results-unit.json
+      - name: Publicar resumen de Unit Tests
+        if: always()
+        run: node .github/scripts/test-summary.mjs tests/reports/results-unit.json "🧪 Unit Tests"
+
+  integration-tests:
+    name: Integration Tests
+    needs: quality
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
         with:
-          files: ./coverage/lcov.info
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-      - name: Análisis de seguridad de dependencias (npm audit)
-        run: npm audit --audit-level=high || true
-  # CodeQL corre EN PARALELO al job test (sin needs): analisis estatico de
-  # seguridad (SAST) sobre el codigo TypeScript y los workflows. Reporta al tab
-  # Security del repo y NO bloquea el deploy (deploy-dev solo needs: test, codeql).
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Generar Prisma Client
+        run: npx prisma generate
+      - name: Ejecutar Integration Tests
+        run: mkdir -p tests/reports && npx jest tests/integration --ci --forceExit --json --outputFile=tests/reports/results-integration.json
+      - name: Publicar resumen de Integration Tests
+        if: always()
+        run: node .github/scripts/test-summary.mjs tests/reports/results-integration.json "🔗 Integration Tests"
+
+  # ==========================================================================
+  # COVERAGE GATE — corre la suite COMBINADA con cobertura y aplica el umbral
+  # del 85% en las 4 métricas (coverageThreshold de Jest → falla el job). La
+  # cobertura es propiedad del CÓDIGO, no de una suite: gatear sobre la
+  # combinada evita forzar una pirámide invertida. Publica el reporte multivista.
+  # ==========================================================================
+  coverage-gate:
+    name: Coverage Gate (85%)
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # historia completa → patch coverage (código nuevo)
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Generar Prisma Client
+        run: npx prisma generate
+      - name: Cobertura COMBINADA + gate 85% (falla si no se cumple)
+        run: npm run test:coverage -- --ci
+      - name: Cobertura por tipo (solo para el reporte, no gatea)
+        if: always()
+        run: |
+          npx jest tests/unit --coverage --coverageDirectory=tests/reports/coverage-unit --coverageThreshold='{}' --ci || true
+          npx jest tests/integration --coverage --coverageDirectory=tests/reports/coverage-integration --coverageThreshold='{}' --forceExit --ci || true
+      - name: Reporte de cobertura (multivista)
+        if: always()
+        run: node .github/scripts/coverage-summary.mjs
+
+  # ==========================================================================
+  # SAST (CodeQL) ∥ SUPPLY CHAIN (Trivy + SBOM) — en paralelo, no bloquean.
+  # ==========================================================================
   codeql:
     name: CodeQL (${{ matrix.language }})
     runs-on: ubuntu-latest
@@ -92,10 +157,6 @@ jobs:
         with:
           category: "/language:${{ matrix.language }}"
 
-  # Trivy + SBOM corren EN PARALELO (sin needs) igual que codeql: escaneo de
-  # vulnerabilidades de dependencias (report-only, exit-code 0) + inventario
-  # CycloneDX. NO alimenta deploy-dev/security-gate -> no puede sumar Medium
-  # al gate de ZAP ni bloquear el pipeline.
   supply-chain:
     name: Supply Chain - Trivy + SBOM
     runs-on: ubuntu-latest
@@ -137,9 +198,55 @@ jobs:
           path: sbom.cdx.json
           retention-days: 90
 
+  # ==========================================================================
+  # DEPENDENCY SCAN — npm audit acotado a producción (OWASP A06).
+  # ==========================================================================
+  dependency-scan:
+    name: Dependency Scan (npm audit)
+    needs: [coverage-gate, codeql]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Auditoría de dependencias de producción
+        run: npm audit --omit=dev --audit-level=high || true
+
+  # ==========================================================================
+  # BUILD — compila TS (el CI antes NO compilaba; solo Render lo hacía).
+  # ==========================================================================
+  build:
+    name: Build
+    needs: [coverage-gate, dependency-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Generar Prisma Client
+        run: npx prisma generate
+      - name: Compilar (nest build)
+        run: npm run build
+
+  # ==========================================================================
+  # CADENA DE DESPLIEGUE — INTACTA (no se toca salvo indicación del usuario):
+  # deploy-dev → smoke-test → (🔒 e2e reservado) → dast → security-gate → deploy-prod
+  # ==========================================================================
   deploy-dev:
     name: Deploy a Desarrollo
-    needs: [test, codeql]
+    needs: [build, codeql]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
@@ -172,6 +279,20 @@ jobs:
           done
           echo "Dev no respondió como NestJS tras los reintentos (¿build falló o sigue en curso?)"
           exit 1
+
+  # 🔒 E2E — RESERVADO (app real + postgres:15 + migraciones). Ver tests/e2e/README.md.
+  # Para activarlo: quitar `if: false` y hacer que `dast` dependa de `e2e`
+  # (needs: e2e). Aquí quedaría el servicio `postgres:15` + `prisma migrate deploy`
+  # + `npm run test:e2e`.
+  e2e:
+    name: E2E (reservado)
+    needs: smoke-test
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "E2E reservado — ver tests/e2e/README.md"
+
   dast:
     name: DAST - OWASP ZAP
     needs: smoke-test
