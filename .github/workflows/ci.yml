@@ -1,5 +1,32 @@
 name: CI/CD Pipeline
 
+# ============================================================================
+# ARQUITECTURA (reestructuración — propuesta oficial NeuroAlert)
+# ----------------------------------------------------------------------------
+# Flujo objetivo (fail-fast + DevSecOps + pirámide de testing):
+#
+#   push/PR ─┬─► Code Quality & Build (type-check · lint · build)
+#            └─► Static Security (SAST) & Supply Chain  [jobs en paralelo]
+#                  · codeql            (SAST semántico, matriz)
+#                  · eslint-security   (SAST de patrones, BLOQUEANTE)
+#                  · bandit            (SAST Python, CUMPLIMIENTO — no bloquea)
+#                  · supply-chain      (Trivy + SBOM, report-only)
+#                  · dependency-scan   (npm audit gate, BLOQUEANTE)
+#                        │
+#                        ▼  (tests esperan calidad + TODA la seguridad estática)
+#            ┌──► unit-tests ──┐
+#            └──► integration-tests ──┴─► coverage-gate (85%) ─► deploy-dev*
+#
+#   *deploy-dev solo en push a main. A partir de aquí sigue la CADENA DE DEPLOY
+#    (Parte 2, aún SIN reestructurar en este PR):
+#      deploy-dev → smoke-test → (e2e reservado) → dast → security-gate → deploy-prod
+#
+# NOTA (modelo de ejecución de GitHub Actions): cada job corre en una VM nueva
+# y aislada; NO existe un job "setup" reutilizable (su entorno no persiste entre
+# jobs). Por eso cada job repite el bloque checkout + setup-node(cache npm) +
+# npm ci: es el patrón idiomático y garantiza entornos reproducibles (Node 20).
+# ============================================================================
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -15,10 +42,14 @@ permissions:
 
 jobs:
   # ==========================================================================
-  # QUALITY — Type Check + Lint (el CI antes NO compilaba TS ni linteaba)
+  # CODE QUALITY & BUILD — primera barrera técnica (fail-fast).
+  # Fusiona el antiguo `quality` (type-check + lint) con el `build`, que antes
+  # corría DESPUÉS de los tests. Se adelanta a esta etapa: no tiene sentido
+  # testear/desplegar si el proyecto ni compila. El `nest build` es idéntico;
+  # solo cambia de posición.
   # ==========================================================================
-  quality:
-    name: Quality (type-check + lint)
+  code-quality-build:
+    name: Code Quality & Build (type-check + lint + build)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout código
@@ -30,21 +61,178 @@ jobs:
           cache: 'npm'
       - name: Instalar dependencias
         run: npm ci
-      - name: Generar Prisma Client (tipos para tsc/eslint)
+      - name: Generar Prisma Client (tipos para tsc/eslint/build)
         run: npx prisma generate
       - name: Type Check
         run: npm run type-check
       - name: Lint
         run: npm run lint
+      - name: Compilar (nest build)
+        run: npm run build
 
   # ==========================================================================
-  # UNIT ∥ INTEGRATION — jobs SEPARADOS y en PARALELO (feedback rápido).
-  # Ninguno necesita Postgres: la integración mockea Prisma (como MSW en el
-  # frontend). El servicio de base de datos queda para el e2e (reservado).
+  # STATIC SECURITY (SAST) & SUPPLY CHAIN — grupo de jobs en PARALELO.
+  # Se implementa como jobs separados (no un único job) para respetar la
+  # responsabilidad única y porque CodeQL usa matriz/permisos propios.
+  # Como CONJUNTO, gatea las pruebas: nada se testea si la seguridad estática
+  # bloqueante no pasa (shift-left security).
+  # ==========================================================================
+
+  # SAST semántico (matriz). Sube resultados a GitHub Security.
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # SAST de patrones inseguros (eslint-plugin-security). BLOQUEANTE (--max-warnings 0).
+  # Config SEPARADA (eslint.security.config.js) de la de calidad: distinta
+  # responsabilidad. Coexiste con CodeQL (complementarios, no compiten).
+  eslint-security:
+    name: SAST - ESLint Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: ESLint Security (bloqueante)
+        run: npm run lint:security
+
+  # SAST de Python (Bandit). El backend es NestJS/TypeScript: NO hay código
+  # Python propio, por lo que Bandit no encuentra nada que analizar. Se incluye
+  # por requisito del curso como control de CUMPLIMIENTO, de forma transparente
+  # y NO BLOQUEANTE (continue-on-error). El SAST efectivo de JS/TS lo cubren
+  # eslint-security y CodeQL.
+  bandit:
+    name: SAST - Bandit (cumplimiento, no bloqueante)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar Bandit
+        run: pip install bandit
+      - name: Ejecutar Bandit sobre src/ (SAST Python)
+        run: |
+          {
+            echo "## 🐍 Bandit (SAST Python) — control de cumplimiento"
+            echo ""
+            echo "El backend es NestJS/TypeScript: **no contiene código Python propio**."
+            echo "Bandit se ejecuta por requisito del curso; el SAST efectivo de JS/TS"
+            echo "lo cubren **ESLint Security** y **CodeQL**. No bloquea el pipeline."
+            echo ""
+            echo '```'
+            bandit -r src -f screen 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Supply chain: Trivy (vulnerabilidades del árbol) + SBOM CycloneDX. Report-only.
+  # ⏳ A FUTURO: evaluar volver Trivy bloqueante (hoy exit-code 0 por decisión
+  # validada durante el desarrollo; convertirlo en gate es otra decisión).
+  supply-chain:
+    name: Supply Chain - Trivy + SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+
+      - name: Trivy - escaneo de vulnerabilidades (SARIF, report-only)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: '.'
+          format: sarif
+          output: trivy-results.sarif
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Subir resultados de Trivy a GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-fs
+
+      - name: Trivy - generar SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: '.'
+          format: cyclonedx
+          output: sbom.cdx.json
+
+      - name: Subir SBOM como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx-backend
+          path: sbom.cdx.json
+          retention-days: 90
+
+  # npm audit como GATE BLOQUEANTE en prod (OWASP A06). Falla ante HIGH/CRITICAL
+  # en dependencias de producción salvo excepción documentada y vigente en
+  # .github/audit-allowlist.json (ver docs/SECURITY-DEPENDENCIES.md).
+  dependency-scan:
+    name: Dependency Scan (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v5
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Gate de dependencias de producción (bloqueante + allowlist)
+        shell: bash
+        run: |
+          set -o pipefail
+          node .github/scripts/audit-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ==========================================================================
+  # UNIT ∥ INTEGRATION — jobs SEPARADOS y en PARALELO (pirámide de testing).
+  # Esperan a Code Quality & Build Y a TODA la etapa de seguridad estática
+  # (no se testea si la seguridad bloqueante falló). Ninguno necesita Postgres:
+  # la integración mockea Prisma (análogo a MSW en el frontend). La DB real
+  # queda para el e2e (reservado, Parte 2).
   # ==========================================================================
   unit-tests:
     name: Unit Tests
-    needs: quality
+    needs: [code-quality-build, codeql, eslint-security, bandit, supply-chain, dependency-scan]
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -68,7 +256,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests
-    needs: quality
+    needs: [code-quality-build, codeql, eslint-security, bandit, supply-chain, dependency-scan]
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -128,131 +316,13 @@ jobs:
         run: node .github/scripts/coverage-summary.mjs
 
   # ==========================================================================
-  # SAST (CodeQL) ∥ SUPPLY CHAIN (Trivy + SBOM) — en paralelo, no bloquean.
-  # ==========================================================================
-  codeql:
-    name: CodeQL (${{ matrix.language }})
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      packages: read
-      actions: read
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [javascript-typescript, actions]
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v5
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: none
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
-        with:
-          category: "/language:${{ matrix.language }}"
-
-  supply-chain:
-    name: Supply Chain - Trivy + SBOM
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v5
-
-      - name: Trivy - escaneo de vulnerabilidades (SARIF, report-only)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: '.'
-          format: sarif
-          output: trivy-results.sarif
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-
-      - name: Subir resultados de Trivy a GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-fs
-
-      - name: Trivy - generar SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: '.'
-          format: cyclonedx
-          output: sbom.cdx.json
-
-      - name: Subir SBOM como artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-cyclonedx-backend
-          path: sbom.cdx.json
-          retention-days: 90
-
-  # ==========================================================================
-  # DEPENDENCY SCAN — gate BLOQUEANTE de npm audit en prod (OWASP A06).
-  # Ya NO es report-only: falla ante HIGH/CRITICAL en dependencias de
-  # producción salvo excepción documentada y vigente en
-  # .github/audit-allowlist.json (ver docs/SECURITY-DEPENDENCIES.md).
-  # ==========================================================================
-  dependency-scan:
-    name: Dependency Scan (npm audit)
-    needs: [coverage-gate, codeql]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v5
-      - name: Configurar Node.js 20
-        uses: actions/setup-node@v5
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Instalar dependencias
-        run: npm ci
-      - name: Gate de dependencias de producción (bloqueante + allowlist)
-        shell: bash
-        run: |
-          set -o pipefail
-          node .github/scripts/audit-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
-
-  # ==========================================================================
-  # BUILD — compila TS (el CI antes NO compilaba; solo Render lo hacía).
-  # ==========================================================================
-  build:
-    name: Build
-    needs: [coverage-gate, dependency-scan]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v5
-      - name: Configurar Node.js 20
-        uses: actions/setup-node@v5
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Instalar dependencias
-        run: npm ci
-      - name: Generar Prisma Client
-        run: npx prisma generate
-      - name: Compilar (nest build)
-        run: npm run build
-
-  # ==========================================================================
-  # CADENA DE DESPLIEGUE — INTACTA (no se toca salvo indicación del usuario):
-  # deploy-dev → smoke-test → (🔒 e2e reservado) → dast → security-gate → deploy-prod
+  # DEPLOY DEV — depende exclusivamente del Coverage Gate (que ya arrastra,
+  # transitivamente, calidad + build + seguridad estática + tests). Solo en
+  # push a main. Contenido INTACTO (hook de Render + espera).
   # ==========================================================================
   deploy-dev:
     name: Deploy a Desarrollo
-    needs: [build, codeql]
+    needs: coverage-gate
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
@@ -263,6 +333,13 @@ jobs:
       - name: Esperar que Render inicie
         run: sleep 30
 
+  # ==========================================================================
+  # CADENA DE DESPLIEGUE — PARTE 2 (aún SIN reestructurar en este PR).
+  # Se mantiene INTACTA para no romper el pipeline; se reorganizará en el
+  # siguiente PR (Health Check + Smoke → E2E → DAST → Security Gate →
+  # Deploy PROD → Production Health Check), según la propuesta.
+  #   deploy-dev → smoke-test → (🔒 e2e reservado) → dast → security-gate → deploy-prod
+  # ==========================================================================
   smoke-test:
     name: Smoke Test en Dev
     needs: deploy-dev
