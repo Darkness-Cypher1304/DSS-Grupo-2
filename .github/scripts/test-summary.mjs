@@ -2,7 +2,9 @@
 // test-summary.mjs — resumen de una corrida de Jest en $GITHUB_STEP_SUMMARY
 // ============================================================================
 // Uso: node .github/scripts/test-summary.mjs <results.json> "<Título>"
-// Lee el JSON de `jest --json --outputFile=...` (agnóstico del proyecto).
+// Lee el JSON de `jest --json --outputFile=...` (agnóstico del proyecto) y emite
+// una tabla Markdown HORIZONTAL (Suites | Tests | Aprobados | Fallidos |
+// Duración | Estado), en paridad con el resumen del frontend.
 // ============================================================================
 
 import fs from 'node:fs';
@@ -25,25 +27,21 @@ try {
 }
 
 const suites = r.numTotalTestSuites ?? 0;
-const passedSuites = r.numPassedTestSuites ?? 0;
+const failedSuites = r.numFailedTestSuites ?? 0;
 const tests = r.numTotalTests ?? 0;
 const passed = r.numPassedTests ?? 0;
 const failed = r.numFailedTests ?? 0;
-const pending = r.numPendingTests ?? 0;
 const durationMs = (r.testResults ?? []).reduce(
   (acc, t) => acc + Math.max(0, (t.endTime ?? 0) - (t.startTime ?? 0)),
   0,
 );
+const ok = failed === 0 && failedSuites === 0;
 
 write(`## ${title}`);
 write('');
-write('| Métrica | Valor |');
-write('|---|---|');
-write(`| Suites | ${passedSuites}/${suites} |`);
-write(`| Tests aprobados | ${passed}/${tests} |`);
-write(`| Tests fallidos | ${failed} |`);
-if (pending) write(`| Tests omitidos | ${pending} |`);
-write(`| Duración | ${(durationMs / 1000).toFixed(1)} s |`);
-write('');
-write(failed === 0 ? '✅ Todas las pruebas pasaron.' : `❌ ${failed} prueba(s) fallaron.`);
+write('| Suites | Tests | Aprobados | Fallidos | Duración | Estado |');
+write('|:--:|:--:|:--:|:--:|:--:|:--:|');
+write(
+  `| ${suites} | ${tests} | ${passed} | ${failed} | ${(durationMs / 1000).toFixed(1)}s | ${ok ? '✅ PASSED' : '❌ FAILED'} |`,
+);
 write('');
