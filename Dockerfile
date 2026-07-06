@@ -10,7 +10,8 @@
 # --------------------------------------------------------------------------
 FROM node:20-alpine AS builder
 
-# Dependencias del sistema para Prisma + bcrypt
+# Dependencias del sistema para Prisma (openssl) y binarios prebuilt (libc6-compat).
+# Nota: el hashing usa bcryptjs (JS puro), no requiere toolchain nativo.
 RUN apk add --no-cache openssl libc6-compat
 
 WORKDIR /app

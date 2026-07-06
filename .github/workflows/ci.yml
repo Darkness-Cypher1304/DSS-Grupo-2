@@ -199,7 +199,10 @@ jobs:
           retention-days: 90
 
   # ==========================================================================
-  # DEPENDENCY SCAN — npm audit acotado a producción (OWASP A06).
+  # DEPENDENCY SCAN — gate BLOQUEANTE de npm audit en prod (OWASP A06).
+  # Ya NO es report-only: falla ante HIGH/CRITICAL en dependencias de
+  # producción salvo excepción documentada y vigente en
+  # .github/audit-allowlist.json (ver docs/SECURITY-DEPENDENCIES.md).
   # ==========================================================================
   dependency-scan:
     name: Dependency Scan (npm audit)
@@ -215,8 +218,11 @@ jobs:
           cache: 'npm'
       - name: Instalar dependencias
         run: npm ci
-      - name: Auditoría de dependencias de producción
-        run: npm audit --omit=dev --audit-level=high || true
+      - name: Gate de dependencias de producción (bloqueante + allowlist)
+        shell: bash
+        run: |
+          set -o pipefail
+          node .github/scripts/audit-gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ==========================================================================
   # BUILD — compila TS (el CI antes NO compilaba; solo Render lo hacía).
