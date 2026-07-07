@@ -57,62 +57,6 @@ describe('UsersService', () => {
     });
   });
 
-  describe('requestSpecialistUpgrade', () => {
-    it('404 si no existe', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
-      await expect(
-        service.requestSpecialistUpgrade('u1', { licenseNumber: 'X', specialty: 'S', institution: 'I', yearsOfExperience: 1, bio: 'b' }, 'ip'),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('rechaza si ya es especialista verificado', async () => {
-      prisma.user.findUnique.mockResolvedValue({
-        ...dbUser({ role: UserRole.SPECIALIST }),
-        specialistProfile: { verificationStatus: 'APPROVED' },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
-      await expect(
-        service.requestSpecialistUpgrade('u1', { licenseNumber: 'X', specialty: 'S', institution: 'I', yearsOfExperience: 1, bio: 'b' }, 'ip'),
-      ).rejects.toThrow(/Ya eres especialista/i);
-    });
-
-    it('crea/actualiza el perfil en PENDING y audita', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prisma.user.findUnique.mockResolvedValue({ ...dbUser(), specialistProfile: null } as any);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prisma.specialistProfile.upsert.mockResolvedValue({ id: 'p1' } as any);
-      const res = await service.requestSpecialistUpgrade('u1', { licenseNumber: 'X', specialty: 'S', institution: 'I', yearsOfExperience: 1, bio: 'b' }, 'ip');
-      expect(prisma.specialistProfile.upsert).toHaveBeenCalled();
-      expect(res.message).toMatch(/Solicitud enviada/i);
-    });
-  });
-
-  describe('verifySpecialist', () => {
-    it('404 si el perfil no existe', async () => {
-      prisma.specialistProfile.findUnique.mockResolvedValue(null);
-      await expect(
-        service.verifySpecialist('p1', USER_IDS.admin, { decision: 'APPROVED' }, 'ip'),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('APPROVED: transacción (perfil + rol) y audita', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prisma.specialistProfile.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1' } as any);
-      const res = await service.verifySpecialist('p1', USER_IDS.admin, { decision: 'APPROVED' }, 'ip');
-      expect(prisma.$transaction).toHaveBeenCalled();
-      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'SPECIALIST_VERIFIED' }));
-      expect(res.message).toMatch(/aprobado/i);
-    });
-
-    it('REJECTED: actualiza con motivo y audita', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prisma.specialistProfile.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1' } as any);
-      const res = await service.verifySpecialist('p1', USER_IDS.admin, { decision: 'REJECTED', rejectionReason: 'faltan docs' }, 'ip');
-      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'SPECIALIST_REJECTED' }));
-      expect(res.message).toMatch(/rechazada/i);
-    });
-  });
-
   describe('verifyUserEmail / updateUserStatus / listUsers', () => {
     it('verifyUserEmail 404 si no existe, si existe activa', async () => {
       prisma.user.findUnique.mockResolvedValueOnce(null);

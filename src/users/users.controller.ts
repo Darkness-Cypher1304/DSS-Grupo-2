@@ -25,8 +25,6 @@ import { constantTimeEqual } from '../common/security/constant-time';
 import {
   UpdateProfileDto,
   UpdateUserStatusDto,
-  RequestSpecialistUpgradeDto,
-  VerifySpecialistDto,
   RequestAccountDeletionDto,
   RequestLeaveDto,
   LeaveDecisionDto,
@@ -62,19 +60,6 @@ export class UsersController {
     return this.usersService.updateMyProfile(user.sub, dto, ip);
   }
 
-  // --------------------------------------------------------------------------
-  // POST /users/me/request-specialist
-  // --------------------------------------------------------------------------
-  @Post('me/request-specialist')
-  @ApiOperation({ summary: 'Solicitar upgrade a Especialista' })
-  requestSpecialistUpgrade(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: RequestSpecialistUpgradeDto,
-    @ClientIp() ip: string,
-  ) {
-    return this.usersService.requestSpecialistUpgrade(user.sub, dto, ip);
-  }
-
   // ==========================================================================
   // ENDPOINTS ADMIN
   // ==========================================================================
@@ -86,25 +71,6 @@ export class UsersController {
     @Query('perPage', new DefaultValuePipe(20), ParseIntPipe) perPage: number,
   ) {
     return this.usersService.listUsers(page, Math.min(perPage, 100));
-  }
-
-  @Get('admin/specialists/pending')
-  @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'Listar especialistas pendientes de verificación' })
-  listPendingSpecialists() {
-    return this.usersService.listPendingSpecialists();
-  }
-
-  @Patch('admin/specialists/:profileId/verify')
-  @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'Aprobar o rechazar especialista' })
-  verifySpecialist(
-    @Param('profileId') profileId: string,
-    @CurrentUser() admin: AuthUser,
-    @Body() dto: VerifySpecialistDto,
-    @ClientIp() ip: string,
-  ) {
-    return this.usersService.verifySpecialist(profileId, admin.sub, dto, ip);
   }
 
   @Patch('admin/:userId/verify-email')

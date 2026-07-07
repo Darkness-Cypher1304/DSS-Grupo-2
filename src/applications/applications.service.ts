@@ -75,22 +75,21 @@ export class ApplicationsService {
       throw new BadRequestException('El currículum debe ser un archivo PDF.');
     }
 
-    // El correo ya pertenece a una cuenta existente → la postulación PÚBLICA no
-    // procede: esa persona debe iniciar sesión y postular como especialista desde
-    // su perfil ("Ser especialista", flujo de upgrade). Se detecta AQUÍ (en el
+    // Un correo pertenece SIEMPRE a una sola cuenta/rol: si ya está registrado
+    // (en cualquier rol) la postulación pública no procede. Se detecta AQUÍ (en el
     // envío), no al aprobar, para no hacer trabajar en vano al postulante ni al
     // admin, y para que la creación de cuenta al aprobar nunca choque (P2002).
-    // (Trade-off consciente: en un formulario de postulación —no de login— guiar
-    //  a un usuario legítimo pesa más que la mínima fuga de enumeración, que
-    //  además está limitada por el rate-limit y la fricción de subir documentos.)
+    // El mensaje es GENÉRICO a propósito: no confirma que el correo exista (evita
+    // fuga de enumeración) y no deriva a ningún flujo de "upgrade" desde el perfil
+    // (ese flujo se eliminó: una persona = una sola cuenta/rol).
     const existingUser = await this.prisma.user.findUnique({
       where: { email: dto.email },
       select: { id: true },
     });
     if (existingUser) {
       throw new ConflictException(
-        'Ese correo ya está asociado a una cuenta de NeuroAlert. Inicia sesión y postula como ' +
-          'especialista desde tu perfil, en la opción "Ser especialista".',
+        'No es posible registrar tu postulación con los datos proporcionados. ' +
+          'Verifica la información e inténtalo nuevamente.',
       );
     }
 
