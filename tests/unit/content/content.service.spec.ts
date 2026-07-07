@@ -175,6 +175,28 @@ describe('ContentService', () => {
 
       expect(audit.log).not.toHaveBeenCalled();
     });
+
+    it('publicar fija publishedAt con la fecha actual', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.content.update.mockResolvedValue({ id: 'c1' } as any);
+
+      await service.changeStatus(USER_IDS.admin, 'c1', { status: ContentStatus.PUBLISHED }, '1.1.1.1');
+
+      const dataArg = prisma.content.update.mock.calls[0][0].data;
+      expect(dataArg.publishedAt).toBeInstanceOf(Date);
+    });
+
+    it('archivar un artículo NO toca publishedAt (no borra la fecha original) — H5', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.content.update.mockResolvedValue({ id: 'c1' } as any);
+
+      await service.changeStatus(USER_IDS.admin, 'c1', { status: ContentStatus.ARCHIVED }, '1.1.1.1');
+
+      const dataArg = prisma.content.update.mock.calls[0][0].data;
+      // Antes ponía publishedAt: null (borraba la fecha). Ahora ni siquiera
+      // incluye el campo en la transición a ARCHIVED.
+      expect(dataArg).not.toHaveProperty('publishedAt');
+    });
   });
 
   describe('softDelete', () => {

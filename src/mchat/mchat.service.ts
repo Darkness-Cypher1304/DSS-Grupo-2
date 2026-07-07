@@ -130,6 +130,9 @@ export class MchatService {
     // solo el padre dueño o un admin pueden ver la evaluación. Cierra IDOR
     // (OWASP A01) aunque el RLS no esté activo en la conexión actual.
     // Devolvemos 404 (no 403) para no revelar que el recurso existe.
+    // Nota (H4): hoy el controller expone GET /mchat/:id solo a @Roles(PARENT),
+    // así que la rama ADMIN es inalcanzable en runtime (fail-closed). Se conserva
+    // como defensa en profundidad para cuando exista una vista de admin.
     if (screening.parentId !== parentId && parentRole !== UserRole.ADMIN) {
       throw new NotFoundException('Evaluación no encontrada');
     }
