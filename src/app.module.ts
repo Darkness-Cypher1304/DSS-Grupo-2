@@ -16,6 +16,7 @@ import { LoggerModule } from 'nestjs-pino';
 
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './config/redis.module';
+import { validateEnv } from './config/env.validation';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ContentModule } from './content/content.module';
@@ -41,8 +42,9 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
-      // En producción, validaríamos con Joi que las variables existan.
-      // Aquí confiamos en .env.example bien documentado.
+      // Valida al arrancar (fail-fast) que existan las variables críticas
+      // (DATABASE_URL + secretos JWT). Las desconocidas se preservan. Ver H8.
+      validate: validateEnv,
     }),
 
     // ------------------------------------------------------------------------
