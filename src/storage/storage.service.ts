@@ -26,6 +26,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHash, createHmac } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { constantTimeEqual } from '../common/security/constant-time';
 
 export type StorageFolder = 'specialist-docs' | 'resources' | 'avatars';
 export const STORAGE_FOLDERS: StorageFolder[] = ['specialist-docs', 'resources', 'avatars'];
@@ -198,7 +199,7 @@ export class StorageService {
     const parts = decoded.split('.');
     if (parts.length !== 3) throw new BadRequestException('Token de descarga inválido');
     const [id, expStr, sig] = parts;
-    if (this.sign(`${id}.${expStr}`) !== sig) {
+    if (!constantTimeEqual(this.sign(`${id}.${expStr}`), sig)) {
       throw new BadRequestException('Token de descarga inválido');
     }
     if (parseInt(expStr, 10) < Math.floor(Date.now() / 1000)) {

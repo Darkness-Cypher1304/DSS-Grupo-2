@@ -21,6 +21,7 @@ import { UserRole } from '@prisma/client';
 
 import { UsersService } from './users.service';
 import { CurrentUser, AuthUser, ClientIp, Roles, Public } from '../common/decorators';
+import { constantTimeEqual } from '../common/security/constant-time';
 import {
   UpdateProfileDto,
   UpdateUserStatusDto,
@@ -203,7 +204,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Sistema: anonimizar cuentas cuyo período de gracia venció' })
   processExpiredDeletions(@Headers('x-cron-secret') secret?: string) {
     const expected = this.config.get<string>('CRON_SECRET');
-    if (!expected || !secret || secret !== expected) {
+    if (!expected || !secret || !constantTimeEqual(secret, expected)) {
       throw new UnauthorizedException('No autorizado');
     }
     return this.usersService.processExpiredDeletions();
