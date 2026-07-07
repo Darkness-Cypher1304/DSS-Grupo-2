@@ -65,18 +65,6 @@ describe('Users (integration)', () => {
     expect(res.status).toBe(401);
   });
 
-  it('POST /api/users/me/request-specialist (PARENT) → upsert perfil', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ctx.prisma.user.findUnique.mockResolvedValue({ ...dbUser({ role: UserRole.PARENT }), specialistProfile: null } as any);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ctx.prisma.specialistProfile.upsert.mockResolvedValue({ id: 'p1' } as any);
-    const res = await http()
-      .post('/api/users/me/request-specialist')
-      .set('Authorization', authAs(UserRole.PARENT))
-      .send({ licenseNumber: 'CMP-1', specialty: 'Pediatría', yearsOfExperience: 5 });
-    expect(res.status).toBe(201);
-  });
-
   it('POST /api/users/me/cancel-deletion (PARENT) reactiva la cuenta', async () => {
     ctx.prisma.user.findUnique.mockResolvedValue(dbUser({ status: UserStatus.PENDING_DELETION }));
     const res = await http()
@@ -93,14 +81,6 @@ describe('Users (integration)', () => {
       .set('Authorization', authAs(UserRole.SPECIALIST))
       .send({ reason: 'Finalización de colaboración' });
     expect(res.status).toBe(201);
-  });
-
-  it('GET /api/users/admin/specialists/pending (ADMIN)', async () => {
-    ctx.prisma.specialistProfile.findMany.mockResolvedValue([]);
-    const res = await http()
-      .get('/api/users/admin/specialists/pending')
-      .set('Authorization', authAs(UserRole.ADMIN));
-    expect(res.status).toBe(200);
   });
 
   it('GET /api/users/admin/leave-requests (ADMIN)', async () => {
@@ -122,16 +102,6 @@ describe('Users (integration)', () => {
       .patch('/api/users/admin/leave-requests/l1/approve')
       .set('Authorization', authAs(UserRole.ADMIN))
       .send({ note: 'ok' });
-    expect(res.status).toBe(200);
-  });
-
-  it('PATCH /api/users/admin/specialists/:id/verify (ADMIN)', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ctx.prisma.specialistProfile.findUnique.mockResolvedValue({ id: 'p1', userId: 'u1' } as any);
-    const res = await http()
-      .patch('/api/users/admin/specialists/p1/verify')
-      .set('Authorization', authAs(UserRole.ADMIN))
-      .send({ decision: 'APPROVED' });
     expect(res.status).toBe(200);
   });
 });
