@@ -16,7 +16,9 @@
 //       8-20 → ALTO     (derivación inmediata)
 //
 // ÍTEMS CRÍTICOS (mayor peso clínico):
-//   2, 7, 9, 13, 14, 15  →  un fallo en 2 o más críticos = riesgo MEDIO automático
+//   2, 7, 9, 13, 14, 15  →  un fallo en 2 o más críticos = riesgo ALTO automático
+//   (escalada conservadora de tamizaje: prioriza la detección temprana; ver la
+//    lógica en calculateMchatResult, `criticalFailures >= 2 → HIGH`).
 // ============================================================================
 
 export interface MchatQuestion {
