@@ -241,7 +241,7 @@ export class QuestionsService {
     });
 
     // RF-31 + RF-34: notificar al autor (padre) que su consulta fue respondida,
-    // por DOS canales — correo (RF-31) e in-app (RF-34) — ambos best-effort y a
+    // por DOS canales — in-app (RF-34) y correo (RF-31) — ambos best-effort y a
     // nivel sistema (no en el contexto del especialista, que no debe ver el email
     // del padre). Ninguno bloquea ni rompe el flujo de respuesta.
     try {
@@ -249,10 +249,9 @@ export class QuestionsService {
         where: { id: questionId },
         select: { title: true, author: { select: { id: true, email: true, fullName: true } } },
       });
-      if (q?.author?.email) {
-        await this.mail.sendAnswerNotificationEmail(q.author.email, q.author.fullName, q.title);
-      }
-      // RF-34: notificación in-app (la lee el padre por polling de la campana).
+      // RF-34: notificación in-app PRIMERO (fiable, local a BD). La campana NO
+      // debe depender del correo: se crea aunque el proveedor falle o vaya lento
+      // (mismo patrón que assignToMe(), "lección del flujo de auth").
       if (q?.author?.id) {
         await this.notifications.createForUser({
           userId: q.author.id,
@@ -263,9 +262,18 @@ export class QuestionsService {
           relatedId: questionId,
         });
       }
+      // RF-31: correo best-effort EN SEGUNDO PLANO — no bloquea la respuesta por
+      // la latencia del proveedor ni acopla la notificación in-app al envío.
+      if (q?.author?.email) {
+        void this.mail
+          .sendAnswerNotificationEmail(q.author.email, q.author.fullName, q.title)
+          .catch((e) =>
+            this.logger.warn(`No se pudo enviar correo de respuesta: ${(e as Error).message}`),
+          );
+      }
     } catch (err) {
       this.logger.warn(
-        `No se pudo enviar la notificación de respuesta: ${(err as Error).message}`,
+        `No se pudo notificar la respuesta: ${(err as Error).message}`,
       );
     }
 
