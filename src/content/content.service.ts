@@ -163,7 +163,10 @@ export class ContentService {
         status: dto.status,
         reviewedById: adminId,
         reviewNotes: dto.reviewNotes,
-        publishedAt: dto.status === ContentStatus.PUBLISHED ? new Date() : null,
+        // Solo se fija publishedAt al PUBLICAR. En cualquier otra transición
+        // (archivar/rechazar/volver a borrador) NO se toca el campo, para no
+        // borrar la fecha de publicación original (calidad de dato). H5.
+        ...(dto.status === ContentStatus.PUBLISHED ? { publishedAt: new Date() } : {}),
       },
     });
 
