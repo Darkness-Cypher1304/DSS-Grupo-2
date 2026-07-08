@@ -68,7 +68,7 @@ JWT (guard global). Grupos principales:
 | Recurso | Rutas |
 |---|---|
 | `auth` | register, login, refresh, logout, verify-email, forgot/reset-password, activate-specialist, change-password, sessions |
-| `users` | perfil (`me`), gestión admin, verificación de especialistas, ciclo de vida (bajas/eliminación) |
+| `users` | perfil (`me`), gestión admin (usuarios, estado de cuenta), ciclo de vida de cuentas (bajas/eliminación) |
 | `applications` | postulación de especialista + aprobación/rechazo (admin) |
 | `mchat` | preguntas, envío del cuestionario, historial |
 | `questions` | crear/listar consultas, tomar, responder, cerrar |
